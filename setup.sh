@@ -141,6 +141,21 @@ echo "⏳ Waiting for ComfyUI..."
 for i in {1..60}; do
   if curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
     echo "✅ ComfyUI ready!"
+    echo ""
+    echo "╔════════════════════════════════════════════════════════╗"
+    echo "║  ComfyUI LISTO                                         ║"
+    echo "║                                                        ║"
+    echo "║  Para acceder a ComfyUI:                               ║"
+    echo "║  1. Ir a https://cloud.vast.ai/instances/              ║"
+    echo "║  2. Buscar puerto mapeado para 8188                    ║"
+    echo "║  3. URL: http://\$PUBLIC_IPADDR:\$VAST_TCP_PORT_8188      ║"
+    echo "║                                                        ║"
+    if [ ! -z "$PUBLIC_IPADDR" ] && [ ! -z "$VAST_TCP_PORT_8188" ]; then
+      echo "║  TU URL: http://$PUBLIC_IPADDR:$VAST_TCP_PORT_8188"
+      echo "║                                                        ║"
+    fi
+    echo "╚════════════════════════════════════════════════════════╝"
+    echo ""
     break
   fi
   sleep 2
@@ -166,7 +181,18 @@ if [ ! -z "$GITHUB_REPO" ]; then
   fi
   
   echo "🤖 Starting worker..."
-  python3 worker_vast.py
+  echo "   Worker location: $(pwd)"
+  echo "   Python version: $(python3 --version)"
+  echo "   WORKER_ID: $WORKER_ID"
+  echo "   SUPABASE_URL: $SUPABASE_URL"
+  
+  # Ejecutar worker con logs completos
+  python3 worker_vast.py 2>&1 | tee /var/log/worker-output.log
+  
+  # Si el worker termina, mostrar por qué
+  echo "⚠️ Worker terminó inesperadamente"
+  echo "Últimas 50 líneas del log:"
+  tail -50 /var/log/worker-output.log
 else
   echo "❌ GITHUB_REPO not configured"
   tail -f /workspace/comfyui.log
