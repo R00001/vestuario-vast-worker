@@ -26,20 +26,43 @@ pip install -r requirements.txt
 # Create model directories
 mkdir -p models/unet models/vae models/clip models/checkpoints
 
-# Download FLUX.2 dev FP8 using Python API
+# Download FLUX.2 dev FP8 (con autenticación HF)
 echo "📥 Downloading FLUX.2 dev FP8..."
 python3 << 'PYTHON_EOF'
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, login
+import os
+
+# Autenticar con Hugging Face si hay token
+hf_token = os.getenv('HF_TOKEN')
+if hf_token:
+    try:
+        login(token=hf_token)
+        print("✅ Authenticated with Hugging Face")
+    except Exception as e:
+        print(f"⚠️ Auth warning: {e}")
+
 try:
     hf_hub_download(
         repo_id="black-forest-labs/FLUX.2-dev",
         filename="flux2_dev_fp8.safetensors",
         local_dir="/workspace/ComfyUI/models/checkpoints",
-        local_dir_use_symlinks=False
+        local_dir_use_symlinks=False,
+        token=hf_token  # Pasar token directamente
     )
-    print("✅ FLUX.2 downloaded")
+    print("✅ FLUX.2-dev downloaded")
 except Exception as e:
-    print(f"⚠️ Error: {e}")
+    print(f"❌ Error downloading FLUX.2: {e}")
+    print("Fallback: Trying FLUX.1-schnell (no auth needed)...")
+    try:
+        hf_hub_download(
+            repo_id="black-forest-labs/FLUX.1-schnell",
+            filename="flux1-schnell.safetensors",
+            local_dir="/workspace/ComfyUI/models/checkpoints",
+            local_dir_use_symlinks=False
+        )
+        print("✅ FLUX.1-schnell downloaded as fallback")
+    except Exception as e2:
+        print(f"❌ Fallback also failed: {e2}")
 PYTHON_EOF
 
 # Download VAE
