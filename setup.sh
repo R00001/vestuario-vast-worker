@@ -28,41 +28,46 @@ mkdir -p models/unet models/vae models/clip models/checkpoints
 
 # Download FLUX.2 dev FP8 (con autenticación HF)
 echo "📥 Downloading FLUX.2 dev FP8..."
+
+# Debug: Verificar que HF_TOKEN existe
+if [ -z "$HF_TOKEN" ]; then
+    echo "⚠️ HF_TOKEN no configurado - usando método público"
+else
+    echo "✅ HF_TOKEN configurado (${HF_TOKEN:0:8}...)"
+fi
+
 python3 << 'PYTHON_EOF'
 from huggingface_hub import hf_hub_download, login
 import os
 
-# Autenticar con Hugging Face si hay token
-hf_token = os.getenv('HF_TOKEN')
-if hf_token:
+# Obtener token
+hf_token = os.getenv('HF_TOKEN', '').strip()
+
+if hf_token and hf_token != '':
+    print(f"🔑 Autenticando con HF (token: {hf_token[:8]}...)")
     try:
-        login(token=hf_token)
+        login(token=hf_token, add_to_git_credential=False)
         print("✅ Authenticated with Hugging Face")
     except Exception as e:
-        print(f"⚠️ Auth warning: {e}")
+        print(f"⚠️ Auth error: {e}")
+        hf_token = None
+else:
+    print("⚠️ No HF_TOKEN provided")
+    hf_token = None
 
 try:
+    print("📥 Downloading FLUX.2-dev...")
     hf_hub_download(
         repo_id="black-forest-labs/FLUX.2-dev",
         filename="flux2_dev_fp8.safetensors",
         local_dir="/workspace/ComfyUI/models/checkpoints",
         local_dir_use_symlinks=False,
-        token=hf_token  # Pasar token directamente
+        token=hf_token if hf_token else None
     )
-    print("✅ FLUX.2-dev downloaded")
+    print("✅ FLUX.2-dev downloaded successfully")
 except Exception as e:
-    print(f"❌ Error downloading FLUX.2: {e}")
-    print("Fallback: Trying FLUX.1-schnell (no auth needed)...")
-    try:
-        hf_hub_download(
-            repo_id="black-forest-labs/FLUX.1-schnell",
-            filename="flux1-schnell.safetensors",
-            local_dir="/workspace/ComfyUI/models/checkpoints",
-            local_dir_use_symlinks=False
-        )
-        print("✅ FLUX.1-schnell downloaded as fallback")
-    except Exception as e2:
-        print(f"❌ Fallback also failed: {e2}")
+    print(f"❌ FLUX.2-dev failed: {e}")
+    print("⚠️ Continuando sin FLUX.2 - worker usará FAL.ai como fallback")
 PYTHON_EOF
 
 # Download VAE
