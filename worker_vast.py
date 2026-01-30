@@ -23,8 +23,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 WORKER_ID = os.getenv("WORKER_ID", f"vast-worker-{int(time.time())}")
 
-# Imagen vastai/comfy: puerto 18188 (interno del template)
-COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:18188")
+# Script custom con imagen PyTorch: puerto 8188 estándar
+COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:8188")
 
 WORKER_CONFIG = {
     'POLL_INTERVAL_SECONDS': 5,      # Polling cada 5s
