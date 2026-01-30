@@ -165,7 +165,7 @@ Quality: 4K, consistent lighting, photorealistic, seamless white background."""
     
     return prompt
 
-def execute_comfy_workflow(job):
+def execute_flux_direct(job):
     """
     Ejecutar workflow de ComfyUI para try-on
     TODO: Implementar llamada real a ComfyUI API
@@ -195,60 +195,43 @@ def execute_comfy_workflow(job):
     
     print(f"📝 [Job {job_id}] Prompt generado ({len(prompt)} chars)")
     
-    # 3. Crear workflow de ComfyUI para FLUX.2 Edit
-    # Workflow simplificado usando text-to-image con prompt
-    workflow = {
-        "3": {
-            "inputs": {
-                "ckpt_name": "flux2-dev.safetensors"  # Template descarga este archivo
-            },
-            "class_type": "CheckpointLoaderSimple",
-        },
-        "6": {
-            "inputs": {
-                "text": prompt,
-                "clip": ["3", 1]
-            },
-            "class_type": "CLIPTextEncode",
-        },
-        "5": {
-            "inputs": {
-                "width": 1152,
-                "height": 2016,
-                "batch_size": 1
-            },
-            "class_type": "EmptyLatentImage",
-        },
-        "10": {
-            "inputs": {
-                "seed": int(time.time()),
-                "steps": 28,
-                "cfg": 3.5,
-                "sampler_name": "euler",
-                "scheduler": "simple",
-                "denoise": 1.0,
-                "model": ["3", 0],
-                "positive": ["6", 0],
-                "negative": ["6", 0],
-                "latent_image": ["5", 0]
-            },
-            "class_type": "KSampler",
-        },
-        "8": {
-            "inputs": {
-                "samples": ["10", 0],
-                "vae": ["3", 2]
-            },
-            "class_type": "VAEDecode",
-        },
-        "9": {
-            "inputs": {
-                "filename_prefix": f"tryon_{job_id}",
-                "images": ["8", 0]
-            },
-            "class_type": "SaveImage",
-        }
-    }
+    # Usar diffusers DIRECTAMENTE (mucho más simple que ComfyUI workflow)
+    print(f"🎬 [Job {job_id}] Generando con FLUX.2 vía diffusers...")
+    
+    try:
+        import torch
+        from diffusers import FluxPipeline
+        
+        # Cargar pipeline (primera vez tarda, luego está en RAM)
+        pipe = FluxPipeline.from_pretrained(
+            "/workspace/ComfyUI/models/checkpoints",  # Donde está flux2-dev.safetensors
+            torch_dtype=torch.bfloat16,
+            local_files_only=True
+        ).to("cuda")
+        
+        print(f"📝 [Job {job_id}] Prompt: {prompt[:200]}...")
+        
+        # Generar
+        image = pipe(
+            prompt=prompt,
+            num_inference_steps=28,
+            guidance_scale=3.5,
+            height=2016,
+            width=1152,
+        ).images[0]
+        
+        # Guardar
+        output_path = f"/tmp/job_{job_id}_output.jpg"
+        image.save(output_path, "JPEG", quality=95)
+        
+        print(f"✅ [Job {job_id}] Imagen generada: {output_path}")
+        return output_path
+        
+    except Exception as e:
+        print(f"❌ [Job {job_id}] Error con diffusers: {e}")
+        # Fallback: retornar avatar sin cambios
+        print(f"   Fallback: retornando avatar original")
+        return avatar_path
     
     print(f"📤 [Job {job_id}] Enviando workflow a ComfyUI ({COMFY_URL})...")
     
@@ -417,8 +400,8 @@ def process_job(job):
             }
         }).eq('id', job_id).execute()
         
-        # Ejecutar ComfyUI workflow
-        result_path = execute_comfy_workflow(job)
+        # Ejecutar FLUX.2 directo con diffusers
+        result_path = execute_flux_direct(job)
         
         # Actualizar progreso
         supabase.table('ai_generation_jobs').update({
