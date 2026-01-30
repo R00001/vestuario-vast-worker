@@ -25,7 +25,7 @@ pip install -r requirements.txt
 cat > /etc/supervisor/conf.d/looks-worker.conf << 'SUPERVISOR'
 [program:looks-worker]
 command=/bin/bash -c 'cd /workspace/worker && COMFYUI_API_BASE=http://localhost:18188 python3 -u worker_vast.py'
-environment=WORKER_ID="%(ENV_WORKER_ID)s",SUPABASE_URL="%(ENV_SUPABASE_URL)s",SUPABASE_KEY="%(ENV_SUPABASE_KEY)s"
+environment=WORKER_ID="%(ENV_WORKER_ID)s",SUPABASE_URL="%(ENV_SUPABASE_URL)s",SUPABASE_KEY="%(ENV_SUPABASE_KEY)s",HF_TOKEN="%(ENV_HF_TOKEN)s"
 autostart=true
 autorestart=true
 stderr_logfile=/var/log/looks-worker.err.log
