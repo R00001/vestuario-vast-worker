@@ -200,7 +200,7 @@ def execute_comfy_workflow(job):
     workflow = {
         "3": {
             "inputs": {
-                "ckpt_name": "flux2_dev_fp8.safetensors"
+                "ckpt_name": "flux2-dev.safetensors"  # Debe coincidir con el descargado en setup.sh
             },
             "class_type": "CheckpointLoaderSimple",
         },
@@ -491,32 +491,32 @@ def mark_instance_ready():
 def main_loop():
     """Loop principal del worker"""
     
-    print("⏳ Esperando ComfyUI y provisioning script del template...")
-    print("   El template está descargando FLUX.2 (~15GB), puede tardar 10-15 minutos...")
-    print(f"   Verificando en: {COMFY_URL}")
+    print("⏳ Esperando a que ComfyUI cargue FLUX.2 en VRAM...")
+    print("   Modelos ya descargados en disco, cargando en memoria GPU...")
+    print("   Primera carga puede tardar 2-4 minutos (64GB → VRAM)")
+    print(f"   Verificando: {COMFY_URL}/system_stats")
     
-    # Esperar a que ComfyUI esté listo (template tarda en descargar modelos)
-    max_wait = 900  # 15 minutos para primera vez
+    # Esperar a que ComfyUI esté listo
+    max_wait = 300  # 5 minutos (modelos ya están descargados)
     waited = 0
     
     while not check_comfy_ready() and waited < max_wait:
         time.sleep(10)
         waited += 10
-        if waited % 60 == 0:
-            elapsed_min = waited / 60
-            print(f"   ⏳ Esperando... ({elapsed_min:.0f} min / {max_wait/60:.0f} min) - Descargando FLUX.2 y modelos...")
+        if waited % 30 == 0:
+            print(f"   ⏳ Esperando... ({waited}s / {max_wait}s) - Cargando modelos en VRAM...")
     
     if not check_comfy_ready():
-        print(f"❌ ComfyUI no respondió en {max_wait/60} minutos")
-        print("   Posibles causas:")
-        print("   1. Provisioning script aún descargando (revisar logs de Vast.ai)")
-        print("   2. ComfyUI falló al arrancar")
-        print(f"   3. Puerto incorrecto (esperando en {COMFY_URL})")
-        print("   Tip: Revisa logs en https://cloud.vast.ai/instances/")
+        print(f"❌ ComfyUI no respondió en {max_wait}s")
+        print(f"   URL intentada: {COMFY_URL}")
+        print("   Verificar:")
+        print("   1. ComfyUI arrancó? → ps aux | grep 'python.*main.py'")
+        print("   2. Puerto correcto? → netstat -tulpn | grep 8188")
+        print("   3. Logs de ComfyUI → tail /workspace/comfyui.log")
         sys.exit(1)
     
     print(f"✅ ComfyUI READY en {COMFY_URL}")
-    print("   FLUX.2 descargado y listo para procesar jobs")
+    print("   Modelos cargados, listo para procesar jobs")
     
     # Marcar instancia como ready
     mark_instance_ready()
