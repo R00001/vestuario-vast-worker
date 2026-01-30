@@ -195,43 +195,73 @@ def execute_flux_direct(job):
     
     print(f"📝 [Job {job_id}] Prompt generado ({len(prompt)} chars)")
     
-    # Usar diffusers DIRECTAMENTE (mucho más simple que ComfyUI workflow)
-    print(f"🎬 [Job {job_id}] Generando con FLUX.2 vía diffusers...")
+    # USAR FAL.AI API (probado en Node.js worker)
+    print(f"🎬 [Job {job_id}] Generando con FAL.ai API...")
     
-    try:
-        import torch
-        from diffusers import FluxPipeline
-        
-        # Cargar pipeline (primera vez tarda, luego está en RAM)
-        pipe = FluxPipeline.from_pretrained(
-            "/workspace/ComfyUI/models/checkpoints",  # Donde está flux2-dev.safetensors
-            torch_dtype=torch.bfloat16,
-            local_files_only=True
-        ).to("cuda")
-        
-        print(f"📝 [Job {job_id}] Prompt: {prompt[:200]}...")
-        
-        # Generar
-        image = pipe(
-            prompt=prompt,
-            num_inference_steps=28,
-            guidance_scale=3.5,
-            height=2016,
-            width=1152,
-        ).images[0]
-        
-        # Guardar
-        output_path = f"/tmp/job_{job_id}_output.jpg"
-        image.save(output_path, "JPEG", quality=95)
-        
-        print(f"✅ [Job {job_id}] Imagen generada: {output_path}")
-        return output_path
-        
-    except Exception as e:
-        print(f"❌ [Job {job_id}] Error con diffusers: {e}")
-        # Fallback: retornar avatar sin cambios
-        print(f"   Fallback: retornando avatar original")
+    # Preparar URLs
+    image_urls = [job['input_data']['avatar_url']]
+    for g in garments[:3]:
+        image_urls.append(g['url'])
+    
+    print(f"📸 {len(image_urls)} imágenes")
+    
+    # Llamar a FAL.ai
+    fal_url = "https://queue.fal.run/fal-ai/flux-2/edit"
+    fal_key = os.getenv('FAL_KEY', '')
+    
+    if not fal_key:
+        print(f"⚠️ FAL_KEY no configurado")
         return avatar_path
+    
+    payload = {
+        "prompt": prompt,
+        "image_urls": image_urls,
+        "num_images": 1,
+        "image_size": {"width": 1152, "height": 2016},
+        "guidance_scale": 3.5,
+        "num_inference_steps": 28,
+        "output_format": "jpeg",
+        "enable_safety_checker": False,
+        "sync_mode": False,
+    }
+    
+    # Enviar request
+    resp = requests.post(
+        fal_url,
+        headers={"Authorization": f"Key {fal_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=10
+    )
+    resp.raise_for_status()
+    request_id = resp.json()["request_id"]
+    
+    print(f"✅ Request ID: {request_id}")
+    
+    # Polling
+    status_url = f"{fal_url}/requests/{request_id}/status"
+    for i in range(120):
+        time.sleep(2)
+        status_resp = requests.get(status_url)
+        status = status_resp.json()
+        
+        if status["status"] == "COMPLETED":
+            result_url_resp = requests.get(status["response_url"])
+            result = result_url_resp.json()
+            image_url = result["images"][0]["url"]
+            
+            # Descargar imagen
+            output_path = f"/tmp/job_{job_id}.jpg"
+            img_resp = requests.get(image_url)
+            with open(output_path, 'wb') as f:
+                f.write(img_resp.content)
+            
+            print(f"✅ Imagen de FAL.ai")
+            return output_path
+        
+        if i % 10 == 0:
+            print(f"⏳ FAL.ai procesando... ({i*2}s)")
+    
+    raise Exception("Timeout FAL.ai")
     
     print(f"📤 [Job {job_id}] Enviando workflow a ComfyUI ({COMFY_URL})...")
     
@@ -432,17 +462,13 @@ def process_job(job):
         }).eq('id', job_id).execute()
         
         # Notificar a Vast Manager que procesamos un job
-        # Incrementar jobs_processed usando SQL raw
-        supabase.postgrest.session.execute(
-            supabase.table('vast_instances')
-            .update({
+        try:
+            supabase.table('vast_instances').update({
                 'last_job_at': datetime.utcnow().isoformat(),
-                'jobs_processed': 'jobs_processed + 1',  # SQL raw
                 'status': 'ready',
-            })
-            .eq('worker_id', WORKER_ID)
-            .build()
-        )
+            }).eq('worker_id', WORKER_ID).execute()
+        except Exception as e:
+            print(f"⚠️ Error actualizando instancia: {e}")
         
         print(f"✅ [Job {job_id}] Completado en {processing_time:.1f}s")
         
