@@ -134,29 +134,19 @@ echo "✅ Todos los modelos descargados"
 # Start ComfyUI in background
 echo "🎬 Starting ComfyUI..."
 cd /workspace/ComfyUI
-nohup python main.py --listen 0.0.0.0 --port 8188 > /workspace/comfyui.log 2>&1 &
+# Puerto 18188 (interno) para coincidir con mapping 8188:18188 del template
+nohup python main.py --listen 0.0.0.0 --port 18188 --enable-cors-header > /workspace/comfyui.log 2>&1 &
 
 # Wait for ComfyUI
-echo "⏳ Waiting for ComfyUI..."
+echo "⏳ Waiting for ComfyUI (internal port 18188)..."
 for i in {1..60}; do
-  if curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
-    echo "✅ ComfyUI ready!"
-    echo ""
-    echo "╔════════════════════════════════════════════════════════╗"
-    echo "║  ComfyUI LISTO                                         ║"
-    echo "║                                                        ║"
-    echo "║  Para acceder a ComfyUI:                               ║"
-    echo "║  1. Ir a https://cloud.vast.ai/instances/              ║"
-    echo "║  2. Buscar puerto mapeado para 8188                    ║"
-    echo "║  3. URL: http://\$PUBLIC_IPADDR:\$VAST_TCP_PORT_8188      ║"
-    echo "║                                                        ║"
-    if [ ! -z "$PUBLIC_IPADDR" ] && [ ! -z "$VAST_TCP_PORT_8188" ]; then
-      echo "║  TU URL: http://$PUBLIC_IPADDR:$VAST_TCP_PORT_8188"
-      echo "║                                                        ║"
-    fi
-    echo "╚════════════════════════════════════════════════════════╝"
-    echo ""
+  if curl -s http://127.0.0.1:18188/system_stats > /dev/null 2>&1; then
+    echo "✅ ComfyUI ready on port 18188!"
+    echo "   Find ComfyUI URL in https://cloud.vast.ai/instances/ under port mappings"
     break
+  fi
+  if [ $((i % 10)) -eq 0 ]; then
+    echo "   Still waiting... (${i}s / 120s)"
   fi
   sleep 2
 done
