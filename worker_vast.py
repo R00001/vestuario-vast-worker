@@ -23,8 +23,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 WORKER_ID = os.getenv("WORKER_ID", f"vast-worker-{int(time.time())}")
 
-# Script custom (NO template): puerto 8188 estándar
-COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:8188")
+# Imagen vastai/comfy: puerto 18188 (interno del template)
+COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:18188")
 
 WORKER_CONFIG = {
     'POLL_INTERVAL_SECONDS': 5,      # Polling cada 5s
@@ -200,7 +200,7 @@ def execute_comfy_workflow(job):
     workflow = {
         "3": {
             "inputs": {
-                "ckpt_name": "flux2-dev.safetensors"  # Debe coincidir con el descargado en setup.sh
+                "ckpt_name": "flux2-dev.safetensors"  # Template descarga este archivo
             },
             "class_type": "CheckpointLoaderSimple",
         },

@@ -13,7 +13,8 @@ apt-get install -y git wget curl python3-pip
 
 # Install Python packages
 pip install --upgrade pip setuptools wheel
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# PyTorch 2.4+ necesario para ComfyUI (torch.library.custom_op)
+pip install torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install transformers accelerate diffusers
 pip install supabase requests pillow python-dotenv
 
