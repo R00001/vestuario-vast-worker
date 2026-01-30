@@ -302,28 +302,27 @@ def execute_comfy_workflow(job):
                             images = outputs["9"]["images"]
                             print(f"   {len(images)} imagen(es) en nodo 9")
                             if len(images) > 0:
-                            filename = images[0]["filename"]
-                            subfolder = images[0].get("subfolder", "")
-                            img_type = images[0].get("type", "output")
-                            
-                            # Construir ruta según template de Vast.ai
-                            # El template puede usar /root/ComfyUI/output o /workspace/ComfyUI/output
-                            possible_paths = [
-                                f"/root/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/root/ComfyUI/output/{filename}",
-                                f"/workspace/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/workspace/ComfyUI/output/{filename}",
-                            ]
-                            
-                            result_path = None
-                            for path in possible_paths:
-                                if Path(path).exists():
-                                    result_path = path
-                                    break
-                            
-                            if not result_path:
-                                raise Exception(f"Imagen no encontrada en rutas esperadas: {possible_paths}")
-                            
-                            print(f"✅ [Job {job_id}] Imagen encontrada: {result_path}")
-                            return result_path
+                                filename = images[0]["filename"]
+                                subfolder = images[0].get("subfolder", "")
+                                    img_type = images[0].get("type", "output")
+                                
+                                # Construir ruta según donde esté ComfyUI
+                                possible_paths = [
+                                    f"/root/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/root/ComfyUI/output/{filename}",
+                                    f"/workspace/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/workspace/ComfyUI/output/{filename}",
+                                ]
+                                
+                                result_path = None
+                                for path in possible_paths:
+                                    if Path(path).exists():
+                                        result_path = path
+                                        break
+                                
+                                if not result_path:
+                                    raise Exception(f"Imagen no encontrada en rutas: {possible_paths}")
+                                
+                                print(f"✅ [Job {job_id}] Imagen encontrada: {result_path}")
+                                return result_path
                         else:
                             print(f"❌ [Job {job_id}] Nodo 9 no tiene 'images'")
                             print(f"   Keys en nodo 9: {list(outputs['9'].keys())}")
