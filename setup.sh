@@ -73,17 +73,63 @@ except Exception as e:
     print("⚠️ Continuando sin FLUX.2 - worker usará FAL.ai como fallback")
 PYTHON_EOF
 
-# Download VAE
-echo "📥 Downloading VAE..."
-wget -q -O models/vae/ae.safetensors \
-  https://huggingface.co/black-forest-labs/FLUX.2-dev/resolve/main/ae.safetensors
+# Download VAE (~3-4 GB)
+echo "📥 Downloading VAE (~3-4 GB)..."
+python3 << 'PYTHON_EOF'
+from huggingface_hub import hf_hub_download
+import os
 
-# Download CLIP and T5
-echo "📥 Downloading encoders..."
-wget -q -O models/clip/clip_l.safetensors \
-  https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors
-wget -q -O models/clip/t5xxl_fp8_e4m3fn.safetensors \
-  https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors
+hf_token = os.getenv('HF_TOKEN', '').strip()
+
+try:
+    print("  Downloading ae.safetensors...")
+    hf_hub_download(
+        repo_id="black-forest-labs/FLUX.2-dev",
+        filename="ae.safetensors",
+        local_dir="/workspace/ComfyUI/models/vae",
+        local_dir_use_symlinks=False,
+        token=hf_token if hf_token else None
+    )
+    print("✅ VAE downloaded")
+except Exception as e:
+    print(f"❌ VAE failed: {e}")
+PYTHON_EOF
+
+# Download CLIP (~2 GB)
+echo "📥 Downloading CLIP (~2 GB)..."
+python3 << 'PYTHON_EOF'
+from huggingface_hub import hf_hub_download
+try:
+    print("  Downloading clip_l.safetensors...")
+    hf_hub_download(
+        repo_id="comfyanonymous/flux_text_encoders",
+        filename="clip_l.safetensors",
+        local_dir="/workspace/ComfyUI/models/clip",
+        local_dir_use_symlinks=False
+    )
+    print("✅ CLIP downloaded")
+except Exception as e:
+    print(f"❌ CLIP failed: {e}")
+PYTHON_EOF
+
+# Download T5 (~4 GB)
+echo "📥 Downloading T5 (~4 GB)..."
+python3 << 'PYTHON_EOF'
+from huggingface_hub import hf_hub_download
+try:
+    print("  Downloading t5xxl_fp8_e4m3fn.safetensors...")
+    hf_hub_download(
+        repo_id="comfyanonymous/flux_text_encoders",
+        filename="t5xxl_fp8_e4m3fn.safetensors",
+        local_dir="/workspace/ComfyUI/models/clip",
+        local_dir_use_symlinks=False
+    )
+    print("✅ T5 downloaded")
+except Exception as e:
+    print(f"❌ T5 failed: {e}")
+PYTHON_EOF
+
+echo "✅ Todos los modelos descargados"
 
 # Start ComfyUI in background
 echo "🎬 Starting ComfyUI..."
