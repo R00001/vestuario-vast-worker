@@ -4,6 +4,9 @@ set -e
 echo "🚀 LOOKS - Vast.ai Setup Script"
 echo "Worker ID: $WORKER_ID"
 
+# Aumentar límite de archivos abiertos para descarga de FLUX.2
+ulimit -n 65536
+
 # Update system
 apt-get update -qq
 apt-get install -y git wget curl python3-pip
