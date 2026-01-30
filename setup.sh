@@ -137,19 +137,48 @@ cd /workspace/ComfyUI
 # Puerto 8188 estándar (NO template, imagen PyTorch custom)
 nohup python main.py --listen 0.0.0.0 --port 8188 --enable-cors-header > /workspace/comfyui.log 2>&1 &
 
-# Wait for ComfyUI
+# Wait for ComfyUI con logs en tiempo real
 echo "⏳ Waiting for ComfyUI (port 8188)..."
+echo "   Mostrando últimas líneas de comfyui.log cada 10s..."
+echo ""
+
+comfy_ready=false
 for i in {1..60}; do
   if curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
     echo "✅ ComfyUI ready on port 8188!"
     echo "   Find ComfyUI URL in https://cloud.vast.ai/instances/ under port mappings"
+    comfy_ready=true
     break
   fi
-  if [ $((i % 10)) -eq 0 ]; then
-    echo "   Still waiting... (${i}s / 120s)"
+  
+  # Cada 10 segundos, mostrar últimas líneas del log
+  if [ $((i % 5)) -eq 0 ]; then
+    echo ""
+    echo "━━━ ComfyUI Log (últimas 5 líneas) ━━━"
+    tail -5 /workspace/comfyui.log 2>/dev/null || echo "  (log vacío o no existe)"
+    echo "━━━ Esperando... ($((i*2))s / 120s) ━━━"
+    echo ""
   fi
+  
   sleep 2
 done
+
+# IMPORTANTE: Verificar que ComfyUI arrancó antes de continuar
+if [ "$comfy_ready" = false ]; then
+  echo "❌ ComfyUI NO respondió en 120 segundos"
+  echo "   Verificando qué pasó..."
+  echo ""
+  echo "Proceso de ComfyUI:"
+  ps aux | grep "python.*main.py" | grep -v grep || echo "  ❌ No se encontró proceso ComfyUI"
+  echo ""
+  echo "Puerto 8188:"
+  netstat -tulpn 2>/dev/null | grep 8188 || echo "  ❌ Puerto 8188 no está abierto"
+  echo ""
+  echo "Últimas 30 líneas de comfyui.log:"
+  tail -30 /workspace/comfyui.log
+  echo ""
+  echo "⚠️ CONTINUANDO de todos modos - worker intentará conectar..."
+fi
 
 # Download and start worker
 echo "📥 Downloading worker..."
