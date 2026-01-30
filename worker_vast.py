@@ -22,7 +22,8 @@ from pathlib import Path
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 WORKER_ID = os.getenv("WORKER_ID", f"vast-worker-{int(time.time())}")
-COMFY_URL = "http://127.0.0.1:8188"
+# Template de Vast.ai usa puerto 18188, no 8188
+COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:18188")
 
 WORKER_CONFIG = {
     'POLL_INTERVAL_SECONDS': 5,      # Polling cada 5s
@@ -75,6 +76,36 @@ def download_image(url, local_path):
     except Exception as e:
         print(f"❌ Error descargando {url}: {e}")
         raise
+
+def upload_to_storage(job_id, user_id, image_base64):
+    """Subir imagen a Supabase Storage"""
+    try:
+        import io
+        
+        # Decodificar base64
+        image_bytes = base64.b64decode(image_base64)
+        
+        # Nombre del archivo
+        filename = f"tryon_{user_id}_{job_id}_{int(time.time())}.jpg"
+        filepath = f"{user_id}/tryons/{filename}"
+        
+        # Subir a Supabase
+        result = supabase.storage.from_('avatars').upload(
+            filepath,
+            image_bytes,
+            file_options={"content-type": "image/jpeg"}
+        )
+        
+        # Obtener URL pública
+        public_url = supabase.storage.from_('avatars').get_public_url(filepath)
+        
+        print(f"✅ Imagen subida a Storage: {public_url}")
+        return public_url
+        
+    except Exception as e:
+        print(f"❌ Error subiendo a Storage: {e}")
+        # Fallback: retornar data URI
+        return f"data:image/jpeg;base64,{image_base64}"
 
 def build_tryon_prompt(products_metadata):
     """Construir prompt similar a buildTryOnPrompt de Node.js"""
@@ -163,43 +194,147 @@ def execute_comfy_workflow(job):
     
     print(f"📝 [Job {job_id}] Prompt generado ({len(prompt)} chars)")
     
-    # 3. TODO: Ejecutar ComfyUI workflow
-    # Por ahora, mock - en producción llamar a ComfyUI API
-    # POST http://127.0.0.1:8188/prompt con workflow JSON
-    
-    """
+    # 3. Crear workflow de ComfyUI para FLUX.2 Edit
+    # Workflow simplificado usando text-to-image con prompt
     workflow = {
-        "1": {
-            "inputs": {"image": avatar_path},
-            "class_type": "LoadImage",
+        "3": {
+            "inputs": {
+                "ckpt_name": "flux2_dev_fp8.safetensors"
+            },
+            "class_type": "CheckpointLoaderSimple",
         },
-        # ... más nodos del workflow
+        "6": {
+            "inputs": {
+                "text": prompt,
+                "clip": ["3", 1]
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "5": {
+            "inputs": {
+                "width": 1152,
+                "height": 2016,
+                "batch_size": 1
+            },
+            "class_type": "EmptyLatentImage",
+        },
+        "10": {
+            "inputs": {
+                "seed": int(time.time()),
+                "steps": 28,
+                "cfg": 3.5,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["3", 0],
+                "positive": ["6", 0],
+                "negative": ["6", 0],
+                "latent_image": ["5", 0]
+            },
+            "class_type": "KSampler",
+        },
+        "8": {
+            "inputs": {
+                "samples": ["10", 0],
+                "vae": ["3", 2]
+            },
+            "class_type": "VAEDecode",
+        },
+        "9": {
+            "inputs": {
+                "filename_prefix": f"tryon_{job_id}",
+                "images": ["8", 0]
+            },
+            "class_type": "SaveImage",
+        }
     }
     
-    resp = requests.post(f"{COMFY_URL}/prompt", json={"prompt": workflow})
-    prompt_id = resp.json()["prompt_id"]
+    print(f"📤 [Job {job_id}] Enviando workflow a ComfyUI ({COMFY_URL})...")
     
-    # Polling hasta completado
-    while True:
-        history = requests.get(f"{COMFY_URL}/history/{prompt_id}").json()
-        if prompt_id in history:
-            # Extraer imagen final
-            outputs = history[prompt_id]["outputs"]
-            # ... procesar resultado
-            break
-        time.sleep(2)
-    """
-    
-    # Mock: Simular que tarda 20 segundos
-    print(f"⏳ [Job {job_id}] Simulando procesamiento (20s)...")
-    time.sleep(20)
-    
-    # Por ahora retornamos el avatar original (mock)
-    result_path = avatar_path
-    
-    print(f"✅ [Job {job_id}] Workflow completado")
-    
-    return result_path
+    # Enviar workflow a ComfyUI
+    try:
+        resp = requests.post(
+            f"{COMFY_URL}/prompt",
+            json={"prompt": workflow, "client_id": WORKER_ID},
+            timeout=10
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        prompt_id = result.get("prompt_id")
+        
+        if not prompt_id:
+            raise Exception(f"No prompt_id en respuesta: {result}")
+        
+        print(f"✅ [Job {job_id}] Workflow enviado, prompt_id: {prompt_id}")
+        
+        # Polling hasta que complete
+        max_wait = 300  # 5 minutos máximo
+        start_time = time.time()
+        last_progress = 0
+        
+        while (time.time() - start_time) < max_wait:
+            try:
+                # Verificar progreso en queue
+                queue_resp = requests.get(f"{COMFY_URL}/queue", timeout=5)
+                queue = queue_resp.json()
+                
+                # Verificar si completó
+                history_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=5)
+                history = history_resp.json()
+                
+                if prompt_id in history:
+                    # Completado!
+                    outputs = history[prompt_id].get("outputs", {})
+                    
+                    print(f"✅ [Job {job_id}] ComfyUI completó, extrayendo imagen...")
+                    
+                    # Buscar imagen generada (nodo 9: SaveImage)
+                    if "9" in outputs and "images" in outputs["9"]:
+                        images = outputs["9"]["images"]
+                        if len(images) > 0:
+                            filename = images[0]["filename"]
+                            subfolder = images[0].get("subfolder", "")
+                            img_type = images[0].get("type", "output")
+                            
+                            # Construir ruta según template de Vast.ai
+                            # El template puede usar /root/ComfyUI/output o /workspace/ComfyUI/output
+                            possible_paths = [
+                                f"/root/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/root/ComfyUI/output/{filename}",
+                                f"/workspace/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/workspace/ComfyUI/output/{filename}",
+                            ]
+                            
+                            result_path = None
+                            for path in possible_paths:
+                                if Path(path).exists():
+                                    result_path = path
+                                    break
+                            
+                            if not result_path:
+                                raise Exception(f"Imagen no encontrada en rutas esperadas: {possible_paths}")
+                            
+                            print(f"✅ [Job {job_id}] Imagen encontrada: {result_path}")
+                            return result_path
+                    
+                    # Si llegó aquí, el workflow terminó pero sin imagen
+                    print(f"⚠️ [Job {job_id}] Outputs disponibles: {list(outputs.keys())}")
+                    raise Exception("Workflow completó pero sin imagen en nodo 9")
+                
+                # Aún procesando
+                elapsed = int(time.time() - start_time)
+                if elapsed > last_progress + 10:
+                    print(f"⏳ [Job {job_id}] Procesando... ({elapsed}s)")
+                    last_progress = elapsed
+                
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ [Job {job_id}] Error consultando ComfyUI: {e}")
+            
+            time.sleep(3)
+        
+        raise Exception(f"Timeout esperando resultado de ComfyUI ({max_wait}s)")
+        
+    except Exception as e:
+        print(f"❌ [Job {job_id}] Error en ComfyUI: {e}")
+        raise
 
 def upload_result_to_supabase(job_id, user_id, result_path):
     """Subir resultado a Supabase Storage"""
@@ -214,15 +349,20 @@ def upload_result_to_supabase(job_id, user_id, result_path):
         print(f"📤 [Job {job_id}] Subiendo a Storage ({len(file_data)/1024:.1f} KB)...")
         
         # Upload a Supabase Storage
-        supabase.storage.from_("avatars").upload(
+        upload_resp = supabase.storage.from_("avatars").upload(
             storage_path,
             file_data,
-            file_options={"content-type": "image/jpeg", "upsert": "false"}
+            file_options={"content-type": "image/jpeg", "upsert": False}
         )
         
+        print(f"📤 Upload response: {upload_resp}")
+        
         # Obtener URL pública
-        public_url_response = supabase.storage.from_("avatars").get_public_url(storage_path)
-        public_url = public_url_response
+        public_url = supabase.storage.from_("avatars").get_public_url(storage_path)
+        
+        # Manejar diferentes formatos de respuesta del cliente Python
+        if isinstance(public_url, dict):
+            public_url = public_url.get('publicUrl') or public_url.get('publicURL') or str(public_url)
         
         print(f"✅ [Job {job_id}] Subido: {public_url[:80]}...")
         
