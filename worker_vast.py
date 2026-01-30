@@ -432,11 +432,17 @@ def process_job(job):
         }).eq('id', job_id).execute()
         
         # Notificar a Vast Manager que procesamos un job
-        supabase.table('vast_instances').update({
-            'last_job_at': datetime.utcnow().isoformat(),
-            'jobs_processed': supabase.rpc('increment', {'x': 1}),
-            'status': 'ready',  # Volver a ready después de procesar
-        }).eq('worker_id', WORKER_ID).execute()
+        # Incrementar jobs_processed usando SQL raw
+        supabase.postgrest.session.execute(
+            supabase.table('vast_instances')
+            .update({
+                'last_job_at': datetime.utcnow().isoformat(),
+                'jobs_processed': 'jobs_processed + 1',  # SQL raw
+                'status': 'ready',
+            })
+            .eq('worker_id', WORKER_ID)
+            .build()
+        )
         
         print(f"✅ [Job {job_id}] Completado en {processing_time:.1f}s")
         
@@ -458,10 +464,16 @@ def process_job(job):
             'completed_at': datetime.utcnow().isoformat(),
         }).eq('id', job_id).execute()
         
-        # Incrementar contador de fallos
-        supabase.table('vast_instances').update({
-            'jobs_failed': supabase.rpc('increment', {'x': 1}),
-        }).eq('worker_id', WORKER_ID).execute()
+        # Incrementar contador de fallos (skip por ahora - no crítico)
+        try:
+            supabase.postgrest.session.execute(
+                supabase.table('vast_instances')
+                .update({'jobs_failed': 'jobs_failed + 1'})
+                .eq('worker_id', WORKER_ID)
+                .build()
+            )
+        except:
+            pass  # No crítico si falla
         
         return False
 

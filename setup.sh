@@ -147,7 +147,16 @@ comfy_ready=false
 for i in {1..60}; do
   if curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
     echo "✅ ComfyUI ready on port 8188!"
-    echo "   Find ComfyUI URL in https://cloud.vast.ai/instances/ under port mappings"
+    if [ ! -z "$PUBLIC_IPADDR" ]; then
+      echo ""
+      echo "╔══════════════════════════════════════════════════╗"
+      echo "║  ComfyUI URL (acceso externo):"
+      echo "║  Busca puerto externo para 8188 en dashboard"
+      echo "║  https://cloud.vast.ai/instances/"
+      echo "║  URL será: http://$PUBLIC_IPADDR:PUERTO_EXTERNO"
+      echo "╚══════════════════════════════════════════════════╝"
+      echo ""
+    fi
     comfy_ready=true
     break
   fi
