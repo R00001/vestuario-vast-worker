@@ -288,11 +288,20 @@ def execute_comfy_workflow(job):
                     outputs = history[prompt_id].get("outputs", {})
                     
                     print(f"✅ [Job {job_id}] ComfyUI completó, extrayendo imagen...")
+                    print(f"📊 [Job {job_id}] History completo:")
+                    print(json.dumps(history[prompt_id], indent=2)[:2000])  # Primeros 2000 chars
+                    
+                    print(f"📦 [Job {job_id}] Outputs disponibles: {list(outputs.keys())}")
                     
                     # Buscar imagen generada (nodo 9: SaveImage)
-                    if "9" in outputs and "images" in outputs["9"]:
-                        images = outputs["9"]["images"]
-                        if len(images) > 0:
+                    if "9" in outputs:
+                        print(f"✅ [Job {job_id}] Nodo 9 existe en outputs")
+                        print(f"   Contenido nodo 9: {json.dumps(outputs['9'], indent=2)}")
+                        
+                        if "images" in outputs["9"]:
+                            images = outputs["9"]["images"]
+                            print(f"   {len(images)} imagen(es) en nodo 9")
+                            if len(images) > 0:
                             filename = images[0]["filename"]
                             subfolder = images[0].get("subfolder", "")
                             img_type = images[0].get("type", "output")
@@ -315,9 +324,17 @@ def execute_comfy_workflow(job):
                             
                             print(f"✅ [Job {job_id}] Imagen encontrada: {result_path}")
                             return result_path
+                        else:
+                            print(f"❌ [Job {job_id}] Nodo 9 no tiene 'images'")
+                            print(f"   Keys en nodo 9: {list(outputs['9'].keys())}")
+                    else:
+                        print(f"❌ [Job {job_id}] Nodo 9 no existe en outputs")
                     
                     # Si llegó aquí, el workflow terminó pero sin imagen
-                    print(f"⚠️ [Job {job_id}] Outputs disponibles: {list(outputs.keys())}")
+                    print(f"📋 [Job {job_id}] Todos los outputs:")
+                    for node_id, node_output in outputs.items():
+                        print(f"   Nodo {node_id}: {list(node_output.keys())}")
+                    
                     raise Exception("Workflow completó pero sin imagen en nodo 9")
                 
                 # Aún procesando
