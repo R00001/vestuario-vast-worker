@@ -23,8 +23,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 WORKER_ID = os.getenv("WORKER_ID", f"vast-worker-{int(time.time())}")
 
-# Script custom con imagen PyTorch: puerto 8188 estándar
-COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:8188")
+# Template vastai/comfy: puerto 18188
+COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:18188")
 
 WORKER_CONFIG = {
     'POLL_INTERVAL_SECONDS': 5,      # Polling cada 5s
@@ -195,46 +195,38 @@ def execute_flux_direct(job):
     
     print(f"📝 [Job {job_id}] Prompt generado ({len(prompt)} chars)")
     
-    # FAL.ai API (funciona, probado)
-    print(f"🎬 [Job {job_id}] Generando con FAL.ai...")
+    # FLUX.2 con diffusers (según doc oficial)
+    print(f"🎬 [Job {job_id}] Generando con FLUX.2 local (diffusers)...")
     
-    image_urls = [job['input_data']['avatar_url']] + [g['url'] for g in garments[:3]]
+    import torch
+    from diffusers import Flux2Pipeline
     
-    payload = {
-        "prompt": prompt,
-        "image_urls": image_urls,
-        "num_images": 1,
-        "image_size": {"width": 1152, "height": 2016},
-        "guidance_scale": 3.5,
-        "num_inference_steps": 28,
-    }
-    
-    resp = requests.post(
-        "https://queue.fal.run/fal-ai/flux-2/edit",
-        headers={"Authorization": f"Key {os.getenv('FAL_KEY', '')}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=10
+    # Cargar pipeline (RTX 6000 con 97GB puede cargar todo)
+    pipe = Flux2Pipeline.from_pretrained(
+        "black-forest-labs/FLUX.2-dev",
+        cache_dir="/workspace/models",
+        torch_dtype=torch.bfloat16
     )
+    pipe.enable_model_cpu_offload()  # Por si acaso
     
-    request_id = resp.json()["request_id"]
+    print(f"📝 Prompt: {prompt[:150]}...")
     
-    # Polling
-    for i in range(60):
-        time.sleep(2)
-        status = requests.get(f"https://queue.fal.run/fal-ai/flux-2/edit/requests/{request_id}/status").json()
-        
-        if status["status"] == "COMPLETED":
-            result = requests.get(status["response_url"]).json()
-            image_url = result["images"][0]["url"]
-            
-            # Descargar
-            output_path = f"/tmp/job_{job_id}.jpg"
-            with open(output_path, 'wb') as f:
-                f.write(requests.get(image_url).content)
-            
-            return output_path
+    # Generar
+    image = pipe(
+        prompt=prompt,
+        num_inference_steps=28,
+        guidance_scale=3.5,
+        height=2016,
+        width=1152,
+        generator=torch.Generator("cuda").manual_seed(int(time.time()))
+    ).images[0]
     
-    raise Exception("Timeout")
+    # Guardar
+    output_path = f"/tmp/job_{job_id}.jpg"
+    image.save(output_path, "JPEG", quality=95)
+    
+    print(f"✅ Imagen generada en GPU local")
+    return output_path
     
     print(f"📤 [Job {job_id}] Enviando workflow a ComfyUI ({COMFY_URL})...")
     
