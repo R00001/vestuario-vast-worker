@@ -490,23 +490,32 @@ def mark_instance_ready():
 def main_loop():
     """Loop principal del worker"""
     
-    print("⏳ Esperando ComfyUI...")
+    print("⏳ Esperando ComfyUI y provisioning script del template...")
+    print("   El template está descargando FLUX.2 (~15GB), puede tardar 10-15 minutos...")
+    print(f"   Verificando en: {COMFY_URL}")
     
-    # Esperar a que ComfyUI esté listo
-    max_wait = 120  # 2 minutos
+    # Esperar a que ComfyUI esté listo (template tarda en descargar modelos)
+    max_wait = 900  # 15 minutos para primera vez
     waited = 0
     
     while not check_comfy_ready() and waited < max_wait:
-        time.sleep(5)
-        waited += 5
-        if waited % 20 == 0:
-            print(f"   Esperando... ({waited}s / {max_wait}s)")
+        time.sleep(10)
+        waited += 10
+        if waited % 60 == 0:
+            elapsed_min = waited / 60
+            print(f"   ⏳ Esperando... ({elapsed_min:.0f} min / {max_wait/60:.0f} min) - Descargando FLUX.2 y modelos...")
     
     if not check_comfy_ready():
-        print("❌ ComfyUI no respondió en 2 minutos - abortando")
+        print(f"❌ ComfyUI no respondió en {max_wait/60} minutos")
+        print("   Posibles causas:")
+        print("   1. Provisioning script aún descargando (revisar logs de Vast.ai)")
+        print("   2. ComfyUI falló al arrancar")
+        print(f"   3. Puerto incorrecto (esperando en {COMFY_URL})")
+        print("   Tip: Revisa logs en https://cloud.vast.ai/instances/")
         sys.exit(1)
     
-    print("✅ ComfyUI READY")
+    print(f"✅ ComfyUI READY en {COMFY_URL}")
+    print("   FLUX.2 descargado y listo para procesar jobs")
     
     # Marcar instancia como ready
     mark_instance_ready()
