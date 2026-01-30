@@ -30,34 +30,9 @@ pip install -r requirements.txt
 # Create model directories
 mkdir -p models/unet models/vae models/clip models/checkpoints
 
-# Download FLUX.2-dev COMPLETO vía diffusers (estructura necesaria)
-echo "📥 Downloading FLUX.2-dev (estructura completa para diffusers)..."
-
-python3 << 'PYTHON_EOF'
-from huggingface_hub import login
-import os
-
-hf_token = os.getenv('HF_TOKEN', '').strip()
-
-if hf_token:
-    print(f"🔑 Autenticando con HF...")
-    login(token=hf_token, add_to_git_credential=False)
-    print("✅ Authenticated")
-
-print("📥 Descargando FLUX.2-dev completo (~64GB)...")
-print("   Esto descarga TODO el modelo para diffusers")
-
-# Descargar modelo completo
-from diffusers import Flux2Pipeline
-pipe = Flux2Pipeline.from_pretrained(
-    "black-forest-labs/FLUX.2-dev",
-    cache_dir="/workspace/models",
-    torch_dtype="auto"
-)
-print("✅ FLUX.2-dev descargado en /workspace/models")
-PYTHON_EOF
-
-echo "✅ FLUX.2 listo para diffusers"
+# FLUX.2-dev YA NO SE DESCARGA (disco lleno)
+# Worker usará FAL.ai API que SÍ funciona
+echo "✅ Setup completo (worker usa FAL.ai)"
 
 # Wait for ComfyUI con logs en tiempo real
 echo "⏳ Waiting for ComfyUI (port 8188)..."
