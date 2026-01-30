@@ -59,7 +59,7 @@ try:
     print("📥 Downloading FLUX.2-dev...")
     hf_hub_download(
         repo_id="black-forest-labs/FLUX.2-dev",
-        filename="flux2_dev_fp8.safetensors",
+        filename="flux2-dev.safetensors",  # Nombre correcto (con guion, no guion bajo)
         local_dir="/workspace/ComfyUI/models/checkpoints",
         local_dir_use_symlinks=False,
         token=hf_token if hf_token else None
