@@ -301,15 +301,15 @@ def execute_comfy_workflow(job):
                         if "images" in outputs["9"]:
                             images = outputs["9"]["images"]
                             print(f"   {len(images)} imagen(es) en nodo 9")
+                            
                             if len(images) > 0:
                                 filename = images[0]["filename"]
                                 subfolder = images[0].get("subfolder", "")
-                                    img_type = images[0].get("type", "output")
                                 
-                                # Construir ruta según donde esté ComfyUI
+                                # Construir ruta
                                 possible_paths = [
-                                    f"/root/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/root/ComfyUI/output/{filename}",
                                     f"/workspace/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/workspace/ComfyUI/output/{filename}",
+                                    f"/root/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/root/ComfyUI/output/{filename}",
                                 ]
                                 
                                 result_path = None
@@ -319,15 +319,16 @@ def execute_comfy_workflow(job):
                                         break
                                 
                                 if not result_path:
-                                    raise Exception(f"Imagen no encontrada en rutas: {possible_paths}")
+                                    raise Exception(f"Imagen no encontrada: {possible_paths}")
                                 
-                                print(f"✅ [Job {job_id}] Imagen encontrada: {result_path}")
+                                print(f"✅ [Job {job_id}] Imagen: {result_path}")
                                 return result_path
+                            else:
+                                print(f"❌ Lista vacía")
                         else:
-                            print(f"❌ [Job {job_id}] Nodo 9 no tiene 'images'")
-                            print(f"   Keys en nodo 9: {list(outputs['9'].keys())}")
+                            print(f"❌ Sin 'images', keys: {list(outputs['9'].keys())}")
                     else:
-                        print(f"❌ [Job {job_id}] Nodo 9 no existe en outputs")
+                        print(f"❌ Nodo 9 no existe")
                     
                     # Si llegó aquí, el workflow terminó pero sin imagen
                     print(f"📋 [Job {job_id}] Todos los outputs:")
