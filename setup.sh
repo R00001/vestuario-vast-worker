@@ -13,9 +13,9 @@ apt-get install -y git wget curl python3-pip
 
 # Install Python packages
 pip install --upgrade pip setuptools wheel
-# PyTorch 2.4+ necesario para ComfyUI (torch.library.custom_op)
 pip install torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install transformers accelerate diffusers
+pip install git+https://github.com/huggingface/diffusers.git
+pip install --upgrade transformers accelerate bitsandbytes
 pip install supabase requests pillow python-dotenv
 
 # Create workspace
@@ -30,113 +30,34 @@ pip install -r requirements.txt
 # Create model directories
 mkdir -p models/unet models/vae models/clip models/checkpoints
 
-# Download FLUX.2 dev FP8 (con autenticación HF)
-echo "📥 Downloading FLUX.2 dev FP8..."
-
-# Debug: Verificar que HF_TOKEN existe
-if [ -z "$HF_TOKEN" ]; then
-    echo "⚠️ HF_TOKEN no configurado - usando método público"
-else
-    echo "✅ HF_TOKEN configurado (${HF_TOKEN:0:8}...)"
-fi
+# Download FLUX.2-dev COMPLETO vía diffusers (estructura necesaria)
+echo "📥 Downloading FLUX.2-dev (estructura completa para diffusers)..."
 
 python3 << 'PYTHON_EOF'
-from huggingface_hub import hf_hub_download, login
-import os
-
-# Obtener token
-hf_token = os.getenv('HF_TOKEN', '').strip()
-
-if hf_token and hf_token != '':
-    print(f"🔑 Autenticando con HF (token: {hf_token[:8]}...)")
-    try:
-        login(token=hf_token, add_to_git_credential=False)
-        print("✅ Authenticated with Hugging Face")
-    except Exception as e:
-        print(f"⚠️ Auth error: {e}")
-        hf_token = None
-else:
-    print("⚠️ No HF_TOKEN provided")
-    hf_token = None
-
-try:
-    print("📥 Downloading FLUX.2-dev...")
-    hf_hub_download(
-        repo_id="black-forest-labs/FLUX.2-dev",
-        filename="flux2-dev.safetensors",  # Nombre correcto (con guion, no guion bajo)
-        local_dir="/workspace/ComfyUI/models/checkpoints",
-        local_dir_use_symlinks=False,
-        token=hf_token if hf_token else None
-    )
-    print("✅ FLUX.2-dev downloaded successfully")
-except Exception as e:
-    print(f"❌ FLUX.2-dev failed: {e}")
-    print("⚠️ Continuando sin FLUX.2 - worker usará FAL.ai como fallback")
-PYTHON_EOF
-
-# Download VAE (~3-4 GB)
-echo "📥 Downloading VAE (~3-4 GB)..."
-python3 << 'PYTHON_EOF'
-from huggingface_hub import hf_hub_download
+from huggingface_hub import login
 import os
 
 hf_token = os.getenv('HF_TOKEN', '').strip()
 
-try:
-    print("  Downloading ae.safetensors...")
-    hf_hub_download(
-        repo_id="black-forest-labs/FLUX.2-dev",
-        filename="ae.safetensors",
-        local_dir="/workspace/ComfyUI/models/vae",
-        local_dir_use_symlinks=False,
-        token=hf_token if hf_token else None
-    )
-    print("✅ VAE downloaded")
-except Exception as e:
-    print(f"❌ VAE failed: {e}")
+if hf_token:
+    print(f"🔑 Autenticando con HF...")
+    login(token=hf_token, add_to_git_credential=False)
+    print("✅ Authenticated")
+
+print("📥 Descargando FLUX.2-dev completo (~64GB)...")
+print("   Esto descarga TODO el modelo para diffusers")
+
+# Descargar modelo completo
+from diffusers import Flux2Pipeline
+pipe = Flux2Pipeline.from_pretrained(
+    "black-forest-labs/FLUX.2-dev",
+    cache_dir="/workspace/models",
+    torch_dtype="auto"
+)
+print("✅ FLUX.2-dev descargado en /workspace/models")
 PYTHON_EOF
 
-# Download CLIP (~2 GB)
-echo "📥 Downloading CLIP (~2 GB)..."
-python3 << 'PYTHON_EOF'
-from huggingface_hub import hf_hub_download
-try:
-    print("  Downloading clip_l.safetensors...")
-    hf_hub_download(
-        repo_id="comfyanonymous/flux_text_encoders",
-        filename="clip_l.safetensors",
-        local_dir="/workspace/ComfyUI/models/clip",
-        local_dir_use_symlinks=False
-    )
-    print("✅ CLIP downloaded")
-except Exception as e:
-    print(f"❌ CLIP failed: {e}")
-PYTHON_EOF
-
-# Download T5 (~4 GB)
-echo "📥 Downloading T5 (~4 GB)..."
-python3 << 'PYTHON_EOF'
-from huggingface_hub import hf_hub_download
-try:
-    print("  Downloading t5xxl_fp8_e4m3fn.safetensors...")
-    hf_hub_download(
-        repo_id="comfyanonymous/flux_text_encoders",
-        filename="t5xxl_fp8_e4m3fn.safetensors",
-        local_dir="/workspace/ComfyUI/models/clip",
-        local_dir_use_symlinks=False
-    )
-    print("✅ T5 downloaded")
-except Exception as e:
-    print(f"❌ T5 failed: {e}")
-PYTHON_EOF
-
-echo "✅ Todos los modelos descargados"
-
-# Start ComfyUI in background
-echo "🎬 Starting ComfyUI..."
-cd /workspace/ComfyUI
-# Puerto 8188 estándar (NO template, imagen PyTorch custom)
-nohup python main.py --listen 0.0.0.0 --port 8188 --enable-cors-header > /workspace/comfyui.log 2>&1 &
+echo "✅ FLUX.2 listo para diffusers"
 
 # Wait for ComfyUI con logs en tiempo real
 echo "⏳ Waiting for ComfyUI (port 8188)..."
