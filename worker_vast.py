@@ -23,10 +23,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 WORKER_ID = os.getenv("WORKER_ID", f"vast-worker-{int(time.time())}")
 
-# Template de Vast.ai incluye ComfyUI API Wrapper en puerto 18288
-# Wrapper simplifica MUCHO el código: https://github.com/ai-dock/comfyui-api-wrapper
-API_WRAPPER_URL = "http://127.0.0.1:18288"
-COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:18188")  # Fallback directo
+# Script custom (NO template): puerto 8188 estándar
+COMFY_URL = os.getenv("COMFYUI_API_BASE", "http://127.0.0.1:8188")
 
 WORKER_CONFIG = {
     'POLL_INTERVAL_SECONDS': 5,      # Polling cada 5s
@@ -55,14 +53,6 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ============================================
 # FUNCIONES AUXILIARES
 # ============================================
-
-def check_api_wrapper_ready():
-    """Verificar que API Wrapper esté listo"""
-    try:
-        resp = requests.get(f"{API_WRAPPER_URL}/health", timeout=5)
-        return resp.status_code == 200
-    except:
-        return False
 
 def check_comfy_ready():
     """Verificar que ComfyUI esté listo"""

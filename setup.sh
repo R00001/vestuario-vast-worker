@@ -134,14 +134,14 @@ echo "✅ Todos los modelos descargados"
 # Start ComfyUI in background
 echo "🎬 Starting ComfyUI..."
 cd /workspace/ComfyUI
-# Puerto 18188 (interno) para coincidir con mapping 8188:18188 del template
-nohup python main.py --listen 0.0.0.0 --port 18188 --enable-cors-header > /workspace/comfyui.log 2>&1 &
+# Puerto 8188 estándar (NO template, imagen PyTorch custom)
+nohup python main.py --listen 0.0.0.0 --port 8188 --enable-cors-header > /workspace/comfyui.log 2>&1 &
 
 # Wait for ComfyUI
-echo "⏳ Waiting for ComfyUI (internal port 18188)..."
+echo "⏳ Waiting for ComfyUI (port 8188)..."
 for i in {1..60}; do
-  if curl -s http://127.0.0.1:18188/system_stats > /dev/null 2>&1; then
-    echo "✅ ComfyUI ready on port 18188!"
+  if curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
+    echo "✅ ComfyUI ready on port 8188!"
     echo "   Find ComfyUI URL in https://cloud.vast.ai/instances/ under port mappings"
     break
   fi
@@ -175,11 +175,17 @@ if [ ! -z "$GITHUB_REPO" ]; then
   echo "   Python version: $(python3 --version)"
   echo "   WORKER_ID: $WORKER_ID"
   echo "   SUPABASE_URL: $SUPABASE_URL"
+  echo ""
+  echo "════════════════════════════════════════════════════════"
+  echo "  WORKER LOGS (también en /var/log/worker-output.log)"
+  echo "════════════════════════════════════════════════════════"
+  echo ""
   
-  # Ejecutar worker con logs completos
-  python3 worker_vast.py 2>&1 | tee /var/log/worker-output.log
+  # Ejecutar worker - logs van a STDOUT (logs de Vast.ai) Y archivo
+  python3 -u worker_vast.py 2>&1 | tee /var/log/worker-output.log
   
   # Si el worker termina, mostrar por qué
+  echo ""
   echo "⚠️ Worker terminó inesperadamente"
   echo "Últimas 50 líneas del log:"
   tail -50 /var/log/worker-output.log
