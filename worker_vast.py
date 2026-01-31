@@ -198,19 +198,114 @@ def execute_flux_direct(job):
     # Usar ComfyUI que ya está cargado por el template
     print(f"🎬 [Job {job_id}] Generando con ComfyUI (FLUX.2)...")
     
-    # ComfyUI workflow simple para FLUX.2
+    # ComfyUI workflow para FLUX.2 (basado en template oficial)
+    # Modelos: flux2_dev_fp8mixed, mistral_3_small_flux2_bf16, flux2-vae
+    seed = int(time.time()) % 999999999
+    
     workflow = {
-        "3": {
-            "inputs": {"text": prompt},
-            "class_type": "CLIPTextEncode"
+        # === MODELO: UNET (FLUX.2 dev) ===
+        "12": {
+            "inputs": {
+                "unet_name": "flux2_dev_fp8mixed.safetensors",
+                "weight_dtype": "default"
+            },
+            "class_type": "UNETLoader"
         },
+        
+        # === MODELO: CLIP (Mistral para FLUX.2) ===
+        "38": {
+            "inputs": {
+                "clip_name": "mistral_3_small_flux2_bf16.safetensors",
+                "type": "flux2",
+                "device": "default"
+            },
+            "class_type": "CLIPLoader"
+        },
+        
+        # === MODELO: VAE ===
+        "10": {
+            "inputs": {
+                "vae_name": "flux2-vae.safetensors"
+            },
+            "class_type": "VAELoader"
+        },
+        
+        # === PROMPT ===
         "6": {
             "inputs": {
                 "text": prompt,
-                "clip": ["11", 0]
+                "clip": ["38", 0]
             },
             "class_type": "CLIPTextEncode"
         },
+        
+        # === FLUX GUIDANCE ===
+        "26": {
+            "inputs": {
+                "guidance": 4.0,
+                "conditioning": ["6", 0]
+            },
+            "class_type": "FluxGuidance"
+        },
+        
+        # === GUIDER ===
+        "22": {
+            "inputs": {
+                "model": ["12", 0],
+                "conditioning": ["26", 0]
+            },
+            "class_type": "BasicGuider"
+        },
+        
+        # === NOISE ===
+        "25": {
+            "inputs": {
+                "noise_seed": seed
+            },
+            "class_type": "RandomNoise"
+        },
+        
+        # === SAMPLER ===
+        "16": {
+            "inputs": {
+                "sampler_name": "euler"
+            },
+            "class_type": "KSamplerSelect"
+        },
+        
+        # === SCHEDULER (Flux2Scheduler) ===
+        "48": {
+            "inputs": {
+                "steps": 20,
+                "width": 1024,
+                "height": 1024
+            },
+            "class_type": "Flux2Scheduler"
+        },
+        
+        # === LATENT IMAGE ===
+        "47": {
+            "inputs": {
+                "width": 1024,
+                "height": 1024,
+                "batch_size": 1
+            },
+            "class_type": "EmptyFlux2LatentImage"
+        },
+        
+        # === SAMPLER CUSTOM ADVANCED ===
+        "13": {
+            "inputs": {
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["48", 0],
+                "latent_image": ["47", 0]
+            },
+            "class_type": "SamplerCustomAdvanced"
+        },
+        
+        # === VAE DECODE ===
         "8": {
             "inputs": {
                 "samples": ["13", 0],
@@ -218,65 +313,14 @@ def execute_flux_direct(job):
             },
             "class_type": "VAEDecode"
         },
+        
+        # === SAVE IMAGE ===
         "9": {
             "inputs": {
                 "filename_prefix": f"tryon_{job_id}",
                 "images": ["8", 0]
             },
             "class_type": "SaveImage"
-        },
-        "10": {
-            "inputs": {"vae_name": "pixel_space"},
-            "class_type": "VAELoader"
-        },
-        "11": {
-            "inputs": {
-                "text_encoder_name": "mistral_3_small_flux2_bf16.safetensors",
-                "type": "flux"
-            },
-            "class_type": "DualCLIPLoader"
-        },
-        "12": {
-            "inputs": {"unet_name": "flux2_dev_fp8mixed.safetensors", "weight_dtype": "default"},
-            "class_type": "UNETLoader"
-        },
-        "13": {
-            "inputs": {
-                "noise": ["25", 0],
-                "guider": ["22", 0],
-                "sampler": ["16", 0],
-                "sigmas": ["17", 0],
-                "latent_image": ["27", 0]
-            },
-            "class_type": "SamplerCustomAdvanced"
-        },
-        "16": {
-            "inputs": {"sampler_name": "euler"},
-            "class_type": "KSamplerSelect"
-        },
-        "17": {
-            "inputs": {
-                "scheduler": "sgm_uniform",
-                "steps": 28,
-                "denoise": 1.0,
-                "model": ["12", 0]
-            },
-            "class_type": "BasicScheduler"
-        },
-        "22": {
-            "inputs": {
-                "model": ["12", 0],
-                "conditioning": ["6", 0]
-            },
-            "class_type": "BasicGuider"
-        },
-        "25": {
-            "inputs": {"noise_seed": int(time.time())},
-            "class_type": "RandomNoise"
-        },
-        "27": {
-            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
-            "class_type": "EmptyLatentImage"
         }
     }
     
