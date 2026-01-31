@@ -226,15 +226,18 @@ def execute_flux_direct(job):
             "class_type": "SaveImage"
         },
         "10": {
-            "inputs": {"vae_name": "ae.safetensors"},
+            "inputs": {"vae_name": "pixel_space"},
             "class_type": "VAELoader"
         },
         "11": {
-            "inputs": {"clip_name1": "clip_l.safetensors", "clip_name2": "t5xxl_fp8_e4m3fn.safetensors"},
+            "inputs": {
+                "text_encoder_name": "mistral_3_small_flux2_bf16.safetensors",
+                "type": "flux"
+            },
             "class_type": "DualCLIPLoader"
         },
         "12": {
-            "inputs": {"unet_name": "flux2-dev.safetensors", "weight_dtype": "default"},
+            "inputs": {"unet_name": "flux2_dev_fp8mixed.safetensors", "weight_dtype": "default"},
             "class_type": "UNETLoader"
         },
         "13": {
