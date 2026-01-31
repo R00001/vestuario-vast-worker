@@ -277,14 +277,31 @@ def execute_flux_direct(job):
         }
     }
     
-    # Enviar a ComfyUI
+    # Enviar a ComfyUI (formato correcto según docs)
+    payload = {
+        "prompt": workflow,
+        "client_id": WORKER_ID
+    }
+    
+    print(f"📤 [Job {job_id}] Enviando payload a ComfyUI...")
+    print(f"   URL: {COMFY_URL}/prompt")
+    
     resp = requests.post(
         f"{COMFY_URL}/prompt",
-        json={"prompt": workflow},
+        json=payload,
+        headers={"Content-Type": "application/json"},
         timeout=10
     )
-    resp.raise_for_status()
+    print(f"📥 [Job {job_id}] Respuesta HTTP: {resp.status_code}")
+    
+    if resp.status_code != 200:
+        print(f"❌ [Job {job_id}] Error HTTP {resp.status_code}")
+        print(f"   Response: {resp.text[:500]}")
+        raise Exception(f"ComfyUI returned {resp.status_code}: {resp.text[:200]}")
+    
     result = resp.json()
+    print(f"📋 [Job {job_id}] Respuesta JSON: {json.dumps(result, indent=2)[:500]}")
+    
     prompt_id = result.get("prompt_id")
     
     if not prompt_id:
