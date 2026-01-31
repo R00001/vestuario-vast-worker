@@ -239,11 +239,12 @@ def execute_flux_direct(job):
     print(f"🎬 [Job {job_id}] Generando con ComfyUI (FLUX.2)...")
     
     # ComfyUI workflow para FLUX.2 Try-On
-    # Usa avatar como referencia + prompt con descripción de prendas
+    # Usa avatar + prendas como referencias encadenadas
     seed = int(time.time()) % 999999999
     
+    # Construir workflow dinámicamente basado en número de prendas
     workflow = {
-        # === MODELO: UNET (FLUX.2 dev) ===
+        # === MODELOS ===
         "12": {
             "inputs": {
                 "unet_name": "flux2_dev_fp8mixed.safetensors",
@@ -251,8 +252,6 @@ def execute_flux_direct(job):
             },
             "class_type": "UNETLoader"
         },
-        
-        # === MODELO: CLIP (Mistral para FLUX.2) ===
         "38": {
             "inputs": {
                 "clip_name": "mistral_3_small_flux2_bf16.safetensors",
@@ -261,42 +260,11 @@ def execute_flux_direct(job):
             },
             "class_type": "CLIPLoader"
         },
-        
-        # === MODELO: VAE ===
         "10": {
             "inputs": {
                 "vae_name": "flux2-vae.safetensors"
             },
             "class_type": "VAELoader"
-        },
-        
-        # === CARGAR AVATAR (imagen de referencia) ===
-        "42": {
-            "inputs": {
-                "image": avatar_filename,
-                "upload": "image"
-            },
-            "class_type": "LoadImage"
-        },
-        
-        # === ESCALAR AVATAR ===
-        "41": {
-            "inputs": {
-                "upscale_method": "area",
-                "megapixels": 1.0,
-                "sharpen": 1,
-                "image": ["42", 0]
-            },
-            "class_type": "ImageScaleToTotalPixels"
-        },
-        
-        # === ENCODE AVATAR A LATENT ===
-        "40": {
-            "inputs": {
-                "pixels": ["41", 0],
-                "vae": ["10", 0]
-            },
-            "class_type": "VAEEncode"
         },
         
         # === PROMPT ===
@@ -307,8 +275,6 @@ def execute_flux_direct(job):
             },
             "class_type": "CLIPTextEncode"
         },
-        
-        # === FLUX GUIDANCE ===
         "26": {
             "inputs": {
                 "guidance": 4.0,
@@ -317,7 +283,32 @@ def execute_flux_direct(job):
             "class_type": "FluxGuidance"
         },
         
-        # === REFERENCE LATENT (usa avatar como referencia) ===
+        # === AVATAR: LoadImage → Scale → VAEEncode ===
+        "42": {
+            "inputs": {
+                "image": avatar_filename,
+                "upload": "image"
+            },
+            "class_type": "LoadImage"
+        },
+        "41": {
+            "inputs": {
+                "upscale_method": "area",
+                "megapixels": 1.0,
+                "sharpen": 1,
+                "image": ["42", 0]
+            },
+            "class_type": "ImageScaleToTotalPixels"
+        },
+        "40": {
+            "inputs": {
+                "pixels": ["41", 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEEncode"
+        },
+        
+        # === REFERENCE 1: Avatar (persona base) ===
         "39": {
             "inputs": {
                 "conditioning": ["26", 0],
@@ -326,32 +317,19 @@ def execute_flux_direct(job):
             "class_type": "ReferenceLatent"
         },
         
-        # === GUIDER (usa conditioning con referencia) ===
-        "22": {
-            "inputs": {
-                "model": ["12", 0],
-                "conditioning": ["39", 0]
-            },
-            "class_type": "BasicGuider"
-        },
-        
-        # === NOISE ===
+        # === NOISE, SAMPLER, SCHEDULER ===
         "25": {
             "inputs": {
                 "noise_seed": seed
             },
             "class_type": "RandomNoise"
         },
-        
-        # === SAMPLER ===
         "16": {
             "inputs": {
                 "sampler_name": "euler"
             },
             "class_type": "KSamplerSelect"
         },
-        
-        # === SCHEDULER (Flux2Scheduler) ===
         "48": {
             "inputs": {
                 "steps": 20,
@@ -360,8 +338,6 @@ def execute_flux_direct(job):
             },
             "class_type": "Flux2Scheduler"
         },
-        
-        # === LATENT IMAGE VACÍO ===
         "47": {
             "inputs": {
                 "width": 1024,
@@ -370,8 +346,69 @@ def execute_flux_direct(job):
             },
             "class_type": "EmptyFlux2LatentImage"
         },
+    }
+    
+    # === AÑADIR PRENDAS COMO REFERENCIAS ENCADENADAS ===
+    # Cada prenda: LoadImage → Scale → VAEEncode → ReferenceLatent
+    last_conditioning_node = "39"  # Avatar es la primera referencia
+    
+    for idx, garment_file in enumerate(garment_filenames):
+        load_id = f"g{idx}_load"      # ej: g0_load
+        scale_id = f"g{idx}_scale"    # ej: g0_scale
+        encode_id = f"g{idx}_encode"  # ej: g0_encode
+        ref_id = f"g{idx}_ref"        # ej: g0_ref
         
-        # === SAMPLER CUSTOM ADVANCED ===
+        # LoadImage para prenda
+        workflow[load_id] = {
+            "inputs": {
+                "image": garment_file,
+                "upload": "image"
+            },
+            "class_type": "LoadImage"
+        }
+        
+        # Escalar prenda
+        workflow[scale_id] = {
+            "inputs": {
+                "upscale_method": "area",
+                "megapixels": 1.0,
+                "sharpen": 1,
+                "image": [load_id, 0]
+            },
+            "class_type": "ImageScaleToTotalPixels"
+        }
+        
+        # VAEEncode prenda
+        workflow[encode_id] = {
+            "inputs": {
+                "pixels": [scale_id, 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEEncode"
+        }
+        
+        # ReferenceLatent encadenado (toma conditioning del anterior)
+        workflow[ref_id] = {
+            "inputs": {
+                "conditioning": [last_conditioning_node, 0],
+                "latent": [encode_id, 0]
+            },
+            "class_type": "ReferenceLatent"
+        }
+        
+        last_conditioning_node = ref_id
+        print(f"   📎 Prenda {idx + 1} añadida: {garment_file} → {ref_id}")
+    
+    # === GUIDER: Usa el último conditioning (con todas las referencias) ===
+    workflow["22"] = {
+        "inputs": {
+            "model": ["12", 0],
+            "conditioning": [last_conditioning_node, 0]
+        },
+        "class_type": "BasicGuider"
+    }
+    
+    # === SAMPLER CUSTOM ADVANCED ===
         "13": {
             "inputs": {
                 "noise": ["25", 0],
