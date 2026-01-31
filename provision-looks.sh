@@ -1,23 +1,12 @@
 #!/bin/bash
 # Provisioning script para Vast.ai template
-# Se ejecuta DESPUÉS del provisioning del template
+# Se ejecuta DURANTE el provisioning del template (antes de que ComfyUI esté ready)
 
 echo "🤖 LOOKS Worker Provisioning"
-echo "Esperando a que template termine..."
+echo "Instalando worker (ComfyUI se cargará en paralelo)..."
 
-# Esperar a que ComfyUI esté ready
-# Template provisioning + descarga FLUX.2 + carga en VRAM = ~15-20 min
-echo "Esperando ComfyUI (provisioning ~12min + carga modelo ~5min)..."
-for i in {1..240}; do  # 20 minutos máximo
-  if curl -s http://localhost:18188/system_stats >/dev/null 2>&1; then
-    echo "✅ ComfyUI ready!"
-    break
-  fi
-  if [ $((i % 12)) -eq 0 ]; then
-    echo "⏳ Esperando... ($(($i * 5 / 60)) min / 20 min)"
-  fi
-  sleep 5
-done
+# NO esperamos ComfyUI aquí - eso crea deadlock
+# El worker esperará a ComfyUI cuando arranque
 
 # Instalar worker
 echo "📥 Instalando worker..."
