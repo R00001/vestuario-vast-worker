@@ -13,7 +13,11 @@ if [ -z "$HF_TOKEN" ]; then
     exit 1
 fi
 
-# Descargar modelos con Python (huggingface_hub ya está instalado en template)
+# Instalar huggingface_hub
+echo "Instalando huggingface_hub..."
+pip install -q huggingface_hub
+
+# Descargar modelos con Python
 python3 << 'PYTHON'
 from huggingface_hub import hf_hub_download
 import os
