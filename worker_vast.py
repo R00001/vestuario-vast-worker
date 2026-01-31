@@ -333,19 +333,12 @@ def execute_flux_direct(job):
         "48": {
             "inputs": {
                 "steps": 20,
-                "width": 1024,
-                "height": 1024
+                "denoise": 0.75  # Mantener estructura del avatar, cambiar ropa
             },
             "class_type": "Flux2Scheduler"
         },
-        "47": {
-            "inputs": {
-                "width": 1024,
-                "height": 1024,
-                "batch_size": 1
-            },
-            "class_type": "EmptyFlux2LatentImage"
-        },
+        # NOTA: Ya no usamos EmptyFlux2LatentImage
+        # El latente del avatar (nodo 40) se usa directamente en el sampler
     }
     
     # === AÑADIR PRENDAS COMO REFERENCIAS ENCADENADAS ===
@@ -408,35 +401,34 @@ def execute_flux_direct(job):
         "class_type": "BasicGuider"
     }
     
-    # === SAMPLER CUSTOM ADVANCED ===
-        "13": {
-            "inputs": {
-                "noise": ["25", 0],
-                "guider": ["22", 0],
-                "sampler": ["16", 0],
-                "sigmas": ["48", 0],
-                "latent_image": ["47", 0]
-            },
-            "class_type": "SamplerCustomAdvanced"
+    # === SAMPLER CUSTOM ADVANCED (img2img - usa latente del avatar) ===
+    workflow["13"] = {
+        "inputs": {
+            "noise": ["25", 0],
+            "guider": ["22", 0],
+            "sampler": ["16", 0],
+            "sigmas": ["48", 0],
+            "latent_image": ["40", 0]  # ← AVATAR latente (img2img, no vacío)
         },
-        
-        # === VAE DECODE ===
-        "8": {
-            "inputs": {
-                "samples": ["13", 0],
-                "vae": ["10", 0]
-            },
-            "class_type": "VAEDecode"
+        "class_type": "SamplerCustomAdvanced"
+    }
+    
+    # === VAE DECODE ===
+    workflow["8"] = {
+        "inputs": {
+            "samples": ["13", 0],
+            "vae": ["10", 0]
         },
-        
-        # === SAVE IMAGE ===
-        "9": {
-            "inputs": {
-                "filename_prefix": f"tryon_{job_id}",
-                "images": ["8", 0]
-            },
-            "class_type": "SaveImage"
-        }
+        "class_type": "VAEDecode"
+    }
+    
+    # === SAVE IMAGE ===
+    workflow["9"] = {
+        "inputs": {
+            "filename_prefix": f"tryon_{job_id}",
+            "images": ["8", 0]
+        },
+        "class_type": "SaveImage"
     }
     
     # Enviar a ComfyUI (formato correcto según docs)
