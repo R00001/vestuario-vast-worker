@@ -108,6 +108,36 @@ def upload_to_storage(job_id, user_id, image_base64):
         # Fallback: retornar data URI
         return f"data:image/jpeg;base64,{image_base64}"
 
+def build_tryon_prompt_comfyui(products_metadata):
+    """
+    Construir prompt para ComfyUI (sin formato @image)
+    ComfyUI usa LoadImage + ReferenceLatent, no texto con @image
+    """
+    
+    if not products_metadata:
+        return "A person wearing casual clothing, professional studio photo, white background"
+    
+    # Describir las prendas que se aplicarán
+    items = []
+    for p in products_metadata:
+        name = p.get('name', 'clothing item')
+        category = p.get('category', 'clothing')
+        items.append(f"{name} ({category})")
+    
+    items_desc = ", ".join(items)
+    
+    prompt = f"""Full body portrait photo of a person wearing: {items_desc}.
+    
+The person has natural appearance, standing straight, facing camera directly.
+Professional studio photography, soft even lighting.
+Background: pure white seamless (#FFFFFF).
+High quality, 4K, sharp focus, photorealistic.
+Clothing fits naturally on the body with realistic folds and shadows.
+Preserve natural skin tone and facial features."""
+    
+    return prompt
+
+
 def build_tryon_prompt(products_metadata):
     """Construir prompt similar a buildTryOnPrompt de Node.js"""
     
@@ -168,38 +198,48 @@ Quality: 4K, consistent lighting, photorealistic, seamless white background."""
 def execute_flux_direct(job):
     """
     Ejecutar workflow de ComfyUI para try-on
-    TODO: Implementar llamada real a ComfyUI API
-    Por ahora, retorna mock
+    Usa el workflow JSON con imágenes de referencia
     """
     
     job_id = job['id']
     
     print(f"🎬 [Job {job_id}] Ejecutando workflow ComfyUI...")
     
-    # 1. Descargar imágenes
+    # Directorio input de ComfyUI
+    COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
+    Path(COMFY_INPUT_DIR).mkdir(parents=True, exist_ok=True)
+    
+    # 1. Descargar avatar al directorio input de ComfyUI
     avatar_url = job['input_data']['avatar_url']
-    garments = job['input_data'].get('garment_images', [])
+    avatar_filename = f"avatar_{job_id}.jpg"
+    avatar_path = f"{COMFY_INPUT_DIR}/{avatar_filename}"
     
-    avatar_path = f"/tmp/job_{job_id}_avatar.jpg"
+    print(f"📥 [Job {job_id}] Descargando avatar...")
     download_image(avatar_url, avatar_path)
+    print(f"   Guardado: {avatar_path}")
     
-    garment_paths = []
+    # 2. Descargar prendas
+    garments = job['input_data'].get('garment_images', [])
+    garment_filenames = []
+    
     for idx, garment in enumerate(garments[:3]):  # Máximo 3 prendas
-        path = f"/tmp/job_{job_id}_garment_{idx}.jpg"
+        filename = f"garment_{job_id}_{idx}.jpg"
+        path = f"{COMFY_INPUT_DIR}/{filename}"
+        print(f"📥 [Job {job_id}] Descargando prenda {idx + 1}...")
         download_image(garment['url'], path)
-        garment_paths.append(path)
+        garment_filenames.append(filename)
     
-    # 2. Construir prompt
+    # 3. Construir prompt (formato ComfyUI, sin @image)
     products_metadata = job['input_data'].get('products_metadata', [])
-    prompt = build_tryon_prompt(products_metadata[:3])
+    prompt = build_tryon_prompt_comfyui(products_metadata[:3])
     
     print(f"📝 [Job {job_id}] Prompt generado ({len(prompt)} chars)")
     
     # Usar ComfyUI que ya está cargado por el template
     print(f"🎬 [Job {job_id}] Generando con ComfyUI (FLUX.2)...")
     
-    # ComfyUI workflow para FLUX.2 (basado en template oficial)
-    # Modelos: flux2_dev_fp8mixed, mistral_3_small_flux2_bf16, flux2-vae
+    # ComfyUI workflow para FLUX.2 Try-On
+    # Usa avatar como referencia + prompt con descripción de prendas
     seed = int(time.time()) % 999999999
     
     workflow = {
@@ -230,6 +270,35 @@ def execute_flux_direct(job):
             "class_type": "VAELoader"
         },
         
+        # === CARGAR AVATAR (imagen de referencia) ===
+        "42": {
+            "inputs": {
+                "image": avatar_filename,
+                "upload": "image"
+            },
+            "class_type": "LoadImage"
+        },
+        
+        # === ESCALAR AVATAR ===
+        "41": {
+            "inputs": {
+                "upscale_method": "area",
+                "megapixels": 1.0,
+                "sharpen": 1,
+                "image": ["42", 0]
+            },
+            "class_type": "ImageScaleToTotalPixels"
+        },
+        
+        # === ENCODE AVATAR A LATENT ===
+        "40": {
+            "inputs": {
+                "pixels": ["41", 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEEncode"
+        },
+        
         # === PROMPT ===
         "6": {
             "inputs": {
@@ -248,11 +317,20 @@ def execute_flux_direct(job):
             "class_type": "FluxGuidance"
         },
         
-        # === GUIDER ===
+        # === REFERENCE LATENT (usa avatar como referencia) ===
+        "39": {
+            "inputs": {
+                "conditioning": ["26", 0],
+                "latent": ["40", 0]
+            },
+            "class_type": "ReferenceLatent"
+        },
+        
+        # === GUIDER (usa conditioning con referencia) ===
         "22": {
             "inputs": {
                 "model": ["12", 0],
-                "conditioning": ["26", 0]
+                "conditioning": ["39", 0]
             },
             "class_type": "BasicGuider"
         },
@@ -283,7 +361,7 @@ def execute_flux_direct(job):
             "class_type": "Flux2Scheduler"
         },
         
-        # === LATENT IMAGE ===
+        # === LATENT IMAGE VACÍO ===
         "47": {
             "inputs": {
                 "width": 1024,
