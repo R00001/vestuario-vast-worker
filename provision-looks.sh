@@ -13,11 +13,13 @@ if [ -z "$HF_TOKEN" ]; then
     exit 1
 fi
 
-# Instalar huggingface_hub
+# Instalar huggingface_hub y esperar
 echo "Instalando huggingface_hub..."
-pip install -q huggingface_hub
+pip install huggingface_hub
+echo "✅ huggingface_hub instalado"
 
 # Descargar modelos con Python
+echo "Descargando modelos FLUX.2 (esto tardará ~15-20 min, 64GB)..."
 python3 << 'PYTHON'
 from huggingface_hub import hf_hub_download
 import os
