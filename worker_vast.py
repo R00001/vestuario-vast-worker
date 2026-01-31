@@ -488,19 +488,19 @@ def main_loop():
     """Loop principal del worker"""
     
     print("⏳ Esperando a que ComfyUI cargue FLUX.2 en VRAM...")
-    print("   Modelos ya descargados en disco, cargando en memoria GPU...")
-    print("   Primera carga puede tardar 2-4 minutos (64GB → VRAM)")
+    print("   Template descarga modelo (~12 min) + carga en VRAM (~5 min)")
+    print("   Primera vez puede tardar hasta 20 minutos total")
     print(f"   Verificando: {COMFY_URL}/system_stats")
     
     # Esperar a que ComfyUI esté listo
-    max_wait = 300  # 5 minutos (modelos ya están descargados)
+    max_wait = 600  # 10 minutos (provision-looks.sh ya esperó antes)
     waited = 0
     
     while not check_comfy_ready() and waited < max_wait:
         time.sleep(10)
         waited += 10
-        if waited % 30 == 0:
-            print(f"   ⏳ Esperando... ({waited}s / {max_wait}s) - Cargando modelos en VRAM...")
+        if waited % 60 == 0:
+            print(f"   ⏳ Esperando... ({waited//60} min / {max_wait//60} min) - Cargando modelos en VRAM...")
     
     if not check_comfy_ready():
         print(f"❌ ComfyUI no respondió en {max_wait}s")
