@@ -13,35 +13,50 @@ if [ -z "$HF_TOKEN" ]; then
     exit 1
 fi
 
-# Instalar huggingface_hub si no está
-pip install -q huggingface-hub
+# Descargar modelos con Python (huggingface_hub ya está instalado en template)
+python3 << 'PYTHON'
+from huggingface_hub import hf_hub_download
+import os
 
-# Descargar modelos a las carpetas de ComfyUI
-echo "Descargando FLUX.2-dev UNet..."
-huggingface-cli download black-forest-labs/FLUX.2-dev \
-    flux2-dev.safetensors \
-    --local-dir /workspace/ComfyUI/models/diffusion_models \
-    --token $HF_TOKEN
+token = os.environ.get('HF_TOKEN')
+if not token:
+    print("❌ ERROR: HF_TOKEN no disponible")
+    exit(1)
 
-echo "Descargando VAE..."
-huggingface-cli download black-forest-labs/FLUX.2-dev \
-    ae.safetensors \
-    --local-dir /workspace/ComfyUI/models/vae \
-    --token $HF_TOKEN
+print("Descargando FLUX.2-dev UNet...")
+hf_hub_download(
+    repo_id="black-forest-labs/FLUX.2-dev",
+    filename="flux2-dev.safetensors",
+    local_dir="/workspace/ComfyUI/models/diffusion_models",
+    token=token
+)
 
-echo "Descargando CLIP-L..."
-huggingface-cli download black-forest-labs/FLUX.2-dev \
-    clip_l.safetensors \
-    --local-dir /workspace/ComfyUI/models/clip \
-    --token $HF_TOKEN
+print("Descargando VAE...")
+hf_hub_download(
+    repo_id="black-forest-labs/FLUX.2-dev",
+    filename="ae.safetensors",
+    local_dir="/workspace/ComfyUI/models/vae",
+    token=token
+)
 
-echo "Descargando T5XXL..."
-huggingface-cli download black-forest-labs/FLUX.2-dev \
-    t5xxl_fp8_e4m3fn.safetensors \
-    --local-dir /workspace/ComfyUI/models/clip \
-    --token $HF_TOKEN
+print("Descargando CLIP-L...")
+hf_hub_download(
+    repo_id="black-forest-labs/FLUX.2-dev",
+    filename="clip_l.safetensors",
+    local_dir="/workspace/ComfyUI/models/clip",
+    token=token
+)
 
-echo "✅ Modelos FLUX.2 descargados"
+print("Descargando T5XXL...")
+hf_hub_download(
+    repo_id="black-forest-labs/FLUX.2-dev",
+    filename="t5xxl_fp8_e4m3fn.safetensors",
+    local_dir="/workspace/ComfyUI/models/clip",
+    token=token
+)
+
+print("✅ Modelos FLUX.2 descargados")
+PYTHON
 
 # 2. Instalar worker
 echo "📥 Instalando worker..."
