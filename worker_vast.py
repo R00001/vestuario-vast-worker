@@ -195,142 +195,135 @@ def execute_flux_direct(job):
     
     print(f"📝 [Job {job_id}] Prompt generado ({len(prompt)} chars)")
     
-    # FLUX.2 con diffusers (según doc oficial)
-    print(f"🎬 [Job {job_id}] Generando con FLUX.2 local (diffusers)...")
+    # Usar ComfyUI que ya está cargado por el template
+    print(f"🎬 [Job {job_id}] Generando con ComfyUI (FLUX.2)...")
     
-    import torch
-    from diffusers import Flux2Pipeline
+    # ComfyUI workflow simple para FLUX.2
+    workflow = {
+        "3": {
+            "inputs": {"text": prompt},
+            "class_type": "CLIPTextEncode"
+        },
+        "6": {
+            "inputs": {
+                "text": prompt,
+                "clip": ["11", 0]
+            },
+            "class_type": "CLIPTextEncode"
+        },
+        "8": {
+            "inputs": {
+                "samples": ["13", 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEDecode"
+        },
+        "9": {
+            "inputs": {
+                "filename_prefix": f"tryon_{job_id}",
+                "images": ["8", 0]
+            },
+            "class_type": "SaveImage"
+        },
+        "10": {
+            "inputs": {"vae_name": "ae.safetensors"},
+            "class_type": "VAELoader"
+        },
+        "11": {
+            "inputs": {"clip_name1": "clip_l.safetensors", "clip_name2": "t5xxl_fp8_e4m3fn.safetensors"},
+            "class_type": "DualCLIPLoader"
+        },
+        "12": {
+            "inputs": {"unet_name": "flux2-dev.safetensors", "weight_dtype": "default"},
+            "class_type": "UNETLoader"
+        },
+        "13": {
+            "inputs": {
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["17", 0],
+                "latent_image": ["27", 0]
+            },
+            "class_type": "SamplerCustomAdvanced"
+        },
+        "16": {
+            "inputs": {"sampler_name": "euler"},
+            "class_type": "KSamplerSelect"
+        },
+        "17": {
+            "inputs": {
+                "scheduler": "sgm_uniform",
+                "steps": 28,
+                "denoise": 1.0,
+                "model": ["12", 0]
+            },
+            "class_type": "BasicScheduler"
+        },
+        "22": {
+            "inputs": {
+                "model": ["12", 0],
+                "conditioning": ["6", 0]
+            },
+            "class_type": "BasicGuider"
+        },
+        "25": {
+            "inputs": {"noise_seed": int(time.time())},
+            "class_type": "RandomNoise"
+        },
+        "27": {
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+            "class_type": "EmptyLatentImage"
+        }
+    }
     
-    # Cargar pipeline (RTX 6000 con 97GB puede cargar todo)
-    pipe = Flux2Pipeline.from_pretrained(
-        "black-forest-labs/FLUX.2-dev",
-        cache_dir="/workspace/models",
-        torch_dtype=torch.bfloat16
+    # Enviar a ComfyUI
+    resp = requests.post(
+        f"{COMFY_URL}/prompt",
+        json={"prompt": workflow},
+        timeout=10
     )
-    pipe.enable_model_cpu_offload()  # Por si acaso
+    resp.raise_for_status()
+    result = resp.json()
+    prompt_id = result.get("prompt_id")
     
-    print(f"📝 Prompt: {prompt[:150]}...")
+    if not prompt_id:
+        raise Exception(f"No prompt_id en respuesta: {result}")
     
-    # Generar
-    image = pipe(
-        prompt=prompt,
-        num_inference_steps=28,
-        guidance_scale=3.5,
-        height=2016,
-        width=1152,
-        generator=torch.Generator("cuda").manual_seed(int(time.time()))
-    ).images[0]
+    print(f"✅ [Job {job_id}] Workflow enviado a ComfyUI, prompt_id: {prompt_id}")
     
-    # Guardar
-    output_path = f"/tmp/job_{job_id}.jpg"
-    image.save(output_path, "JPEG", quality=95)
+    # Polling hasta que complete
+    max_wait = 300
+    start_time = time.time()
     
-    print(f"✅ Imagen generada en GPU local")
-    return output_path
-    
-    print(f"📤 [Job {job_id}] Enviando workflow a ComfyUI ({COMFY_URL})...")
-    
-    # Enviar workflow a ComfyUI
-    try:
-        resp = requests.post(
-            f"{COMFY_URL}/prompt",
-            json={"prompt": workflow, "client_id": WORKER_ID},
-            timeout=10
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        prompt_id = result.get("prompt_id")
-        
-        if not prompt_id:
-            raise Exception(f"No prompt_id en respuesta: {result}")
-        
-        print(f"✅ [Job {job_id}] Workflow enviado, prompt_id: {prompt_id}")
-        
-        # Polling hasta que complete
-        max_wait = 300  # 5 minutos máximo
-        start_time = time.time()
-        last_progress = 0
-        
-        while (time.time() - start_time) < max_wait:
-            try:
-                # Verificar progreso en queue
-                queue_resp = requests.get(f"{COMFY_URL}/queue", timeout=5)
-                queue = queue_resp.json()
+    while (time.time() - start_time) < max_wait:
+        try:
+            history_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=5)
+            history = history_resp.json()
+            
+            if prompt_id in history:
+                outputs = history[prompt_id].get("outputs", {})
                 
-                # Verificar si completó
-                history_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=5)
-                history = history_resp.json()
-                
-                if prompt_id in history:
-                    # Completado!
-                    outputs = history[prompt_id].get("outputs", {})
-                    
-                    print(f"✅ [Job {job_id}] ComfyUI completó, extrayendo imagen...")
-                    print(f"📊 [Job {job_id}] History completo:")
-                    print(json.dumps(history[prompt_id], indent=2)[:2000])  # Primeros 2000 chars
-                    
-                    print(f"📦 [Job {job_id}] Outputs disponibles: {list(outputs.keys())}")
-                    
-                    # Buscar imagen generada (nodo 9: SaveImage)
-                    if "9" in outputs:
-                        print(f"✅ [Job {job_id}] Nodo 9 existe en outputs")
-                        print(f"   Contenido nodo 9: {json.dumps(outputs['9'], indent=2)}")
+                if "9" in outputs and "images" in outputs["9"]:
+                    images = outputs["9"]["images"]
+                    if len(images) > 0:
+                        filename = images[0]["filename"]
+                        subfolder = images[0].get("subfolder", "")
                         
-                        if "images" in outputs["9"]:
-                            images = outputs["9"]["images"]
-                            print(f"   {len(images)} imagen(es) en nodo 9")
-                            
-                            if len(images) > 0:
-                                filename = images[0]["filename"]
-                                subfolder = images[0].get("subfolder", "")
-                                
-                                # Construir ruta
-                                possible_paths = [
-                                    f"/workspace/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/workspace/ComfyUI/output/{filename}",
-                                    f"/root/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/root/ComfyUI/output/{filename}",
-                                ]
-                                
-                                result_path = None
-                                for path in possible_paths:
-                                    if Path(path).exists():
-                                        result_path = path
-                                        break
-                                
-                                if not result_path:
-                                    raise Exception(f"Imagen no encontrada: {possible_paths}")
-                                
-                                print(f"✅ [Job {job_id}] Imagen: {result_path}")
-                                return result_path
-                            else:
-                                print(f"❌ Lista vacía")
-                        else:
-                            print(f"❌ Sin 'images', keys: {list(outputs['9'].keys())}")
-                    else:
-                        print(f"❌ Nodo 9 no existe")
-                    
-                    # Si llegó aquí, el workflow terminó pero sin imagen
-                    print(f"📋 [Job {job_id}] Todos los outputs:")
-                    for node_id, node_output in outputs.items():
-                        print(f"   Nodo {node_id}: {list(node_output.keys())}")
-                    
-                    raise Exception("Workflow completó pero sin imagen en nodo 9")
+                        result_path = f"/workspace/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/workspace/ComfyUI/output/{filename}"
+                        
+                        if Path(result_path).exists():
+                            print(f"✅ [Job {job_id}] Imagen generada: {result_path}")
+                            return result_path
                 
-                # Aún procesando
-                elapsed = int(time.time() - start_time)
-                if elapsed > last_progress + 10:
-                    print(f"⏳ [Job {job_id}] Procesando... ({elapsed}s)")
-                    last_progress = elapsed
-                
-            except requests.exceptions.RequestException as e:
-                print(f"⚠️ [Job {job_id}] Error consultando ComfyUI: {e}")
+                raise Exception("Workflow completó pero sin imagen")
             
             time.sleep(3)
-        
-        raise Exception(f"Timeout esperando resultado de ComfyUI ({max_wait}s)")
-        
-    except Exception as e:
-        print(f"❌ [Job {job_id}] Error en ComfyUI: {e}")
-        raise
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ [Job {job_id}] Error consultando ComfyUI: {e}")
+            time.sleep(3)
+    
+    raise Exception(f"Timeout esperando resultado ({max_wait}s)")
 
 def upload_result_to_supabase(job_id, user_id, result_path):
     """Subir resultado a Supabase Storage"""
