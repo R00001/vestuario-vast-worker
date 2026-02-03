@@ -38,17 +38,22 @@ WORKER_CONFIG = {
 # ============================================
 # CONFIGURACIÓN DE MODELO (auto-detect: NVFP4 > bf16 > fp8)
 # ============================================
+# weight_dtype válidos: 'default', 'fp8_e4m3fn', 'fp8_e4m3fn_fast', 'fp8_e5m2'
+# Para bf16/nvfp4 usar 'default' - ComfyUI detecta automáticamente
+
 def get_optimal_unet_config():
     """Detecta el mejor modelo disponible (prioriza NVFP4 = 6x más rápido)"""
     models_dir = "/workspace/ComfyUI/models/diffusion_models"
     
     # NVFP4 = ~6x más rápido que BF16 con calidad casi idéntica
     if os.path.exists(f"{models_dir}/flux2-dev-nvfp4-mixed.safetensors"):
-        return {"name": "flux2-dev-nvfp4-mixed.safetensors", "dtype": "nvfp4"}
+        return {"name": "flux2-dev-nvfp4-mixed.safetensors", "dtype": "default"}
     elif os.path.exists(f"{models_dir}/flux2-dev-nvfp4.safetensors"):
-        return {"name": "flux2-dev-nvfp4.safetensors", "dtype": "nvfp4"}
+        return {"name": "flux2-dev-nvfp4.safetensors", "dtype": "default"}
     elif os.path.exists(f"{models_dir}/flux2_dev_bf16.safetensors"):
-        return {"name": "flux2_dev_bf16.safetensors", "dtype": "bf16"}
+        return {"name": "flux2_dev_bf16.safetensors", "dtype": "default"}
+    elif os.path.exists(f"{models_dir}/flux2_dev_fp8mixed.safetensors"):
+        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "fp8_e4m3fn_fast"}
     else:
         return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
 
