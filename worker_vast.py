@@ -1212,7 +1212,7 @@ def execute_flux_direct(job):
         },
         "60": {
             "inputs": {
-                "megapixels": 8.3,  # 4K = 2160x3840 = 8.3MP
+                "megapixels": 2.0,  # 2K = 1080x1920 = 2MP (estable)
                 "image": ["42", 0]
             },
             "class_type": "FluxKontextImageScale"
@@ -1250,8 +1250,8 @@ def execute_flux_direct(job):
             "inputs": {
                 "steps": 30,  # MÁXIMA CALIDAD
                 "denoise": 0.15,  # Bajo para preservar referencias
-                "width": 2160,
-                "height": 3840  # 4K UHD 9:16
+                "width": 1080,
+                "height": 1920  # 2K Full HD 9:16
             },
             "class_type": "Flux2Scheduler"
         },
@@ -1278,7 +1278,7 @@ def execute_flux_direct(job):
         # FluxKontextImageScale
         workflow[scale_id] = {
             "inputs": {
-                "megapixels": 8.3,  # 4K = 8.3MP
+                "megapixels": 2.0,  # 2K estable
                 "image": [load_id, 0]
             },
             "class_type": "FluxKontextImageScale"
