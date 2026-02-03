@@ -680,10 +680,15 @@ def execute_face_enhancement(job):
     
     face_desc = ", ".join(face_desc_parts) if face_desc_parts else ""
     
-    prompt = f"""Professional headshot portrait of the same {gender_term} from the reference image.
+    prompt = f"""PIXEL-PERFECT enhancement of the exact same {gender_term} from reference image.
 {f"Features: {face_desc}." if face_desc else ""}
 
-CRITICAL: Preserve EXACT facial features, skin tone, eye shape, nose, lips, face shape from reference.
+CRITICAL PRESERVATION (DO NOT MODIFY):
+- EXACT same face: bone structure, nose shape, eye shape, lip shape, jawline
+- EXACT same skin tone, texture, freckles, moles, scars
+- EXACT same eye color, eyebrow shape, ear shape
+- IDENTICAL person, NO modifications to facial features
+
 Direct frontal view, eyes looking straight at camera.
 Neutral relaxed expression.
 Background: pure white seamless (#FFFFFF).
@@ -728,7 +733,7 @@ Professional ID photo quality."""
         },
         "26": {
             "inputs": {
-                "guidance": 4.0,
+                "guidance": 7.0,  # Alto para máxima fidelidad facial
                 "conditioning": ["6", 0]
             },
             "class_type": "FluxGuidance"
@@ -785,8 +790,8 @@ Professional ID photo quality."""
         },
         "48": {
             "inputs": {
-                "steps": 15,  # Reducido para velocidad
-                "denoise": 0.55,
+                "steps": 20,  # Más steps para mejor calidad
+                "denoise": 0.25,  # Bajo para preservar cara original
                 "width": 1024,
                 "height": 1024
             },
@@ -880,13 +885,18 @@ def execute_avatar_generation(job):
     
     body_desc = ", ".join(body_desc_parts) if body_desc_parts else ""
     
-    prompt = f"""Full body portrait of the same {gender_term} from the reference face image.
+    prompt = f"""Full body portrait of the EXACT same {gender_term} from reference face image.
 {f"Body: {body_desc}." if body_desc else ""}
 Height approximately {height_cm}cm.
 
+CRITICAL FACE PRESERVATION (PIXEL-PERFECT):
+- Copy EXACT face from reference: bone structure, nose, eyes, lips, jawline
+- IDENTICAL skin tone, texture, freckles, moles
+- Same eye color, eyebrow shape, hair style and color
+- Person MUST be 100% recognizable as same individual
+
 Wearing plain white t-shirt and blue jeans. White sneakers.
 Standing straight, arms relaxed at sides, facing camera directly.
-CRITICAL: Face MUST match reference image exactly - same facial features, skin tone, expression.
 Background: pure white seamless (#FFFFFF).
 Professional studio photography, soft even lighting.
 Full body visible from head to feet.
@@ -929,7 +939,7 @@ High definition, 4K, photorealistic, natural proportions."""
         },
         "26": {
             "inputs": {
-                "guidance": 4.5,
+                "guidance": 7.0,  # Alto para preservar cara exacta
                 "conditioning": ["6", 0]
             },
             "class_type": "FluxGuidance"
@@ -1205,7 +1215,7 @@ def execute_flux_direct(job):
         "48": {
             "inputs": {
                 "steps": 14,  # 25 steps = alta calidad
-                "denoise": 0.25,  # Bajo para preservar referencias
+                "denoise": 0.15,  # Bajo para preservar referencias
                 "width": 576,
                 "height": 1024  # 2K HD 9:16
             },
