@@ -141,35 +141,41 @@ def get_comfy_queue_progress(prompt_id):
 def wait_for_comfy_result(job_id, prompt_id, output_node_id, max_wait=180, total_steps=20):
     """
     Esperar resultado de ComfyUI con actualizaciones de progreso REAL
-    Consulta /progress para obtener el step actual
+    Consulta /queue para obtener el step actual
     """
     waited = 0
     last_progress = 20  # Empezamos en 20% (ya enviado antes de llamar)
+    last_step = 0
     
     while waited < max_wait:
-        time.sleep(2)  # Polling cada 2 segundos
-        waited += 2
+        time.sleep(1)  # Polling cada 1 segundo para más actualizaciones
+        waited += 1
         
-        # Obtener progreso REAL de ComfyUI
+        # Obtener progreso REAL de ComfyUI via /queue
         try:
-            # El endpoint /progress da info del job activo
-            progress_resp = requests.get(f"{COMFY_URL}/progress", timeout=5)
-            if progress_resp.status_code == 200:
-                progress_data = progress_resp.json()
-                # progress_data = {"value": current_step, "max": total_steps}
-                current_step = progress_data.get('value', 0)
-                max_steps = progress_data.get('max', total_steps)
+            queue_resp = requests.get(f"{COMFY_URL}/queue", timeout=5)
+            if queue_resp.status_code == 200:
+                queue_data = queue_resp.json()
+                running = queue_data.get('queue_running', [])
                 
-                if max_steps > 0 and current_step > 0:
-                    # Mapear steps a progreso: 20% (inicio) a 85% (fin generación)
-                    # 65% del rango para los steps
-                    real_progress = 20 + int((current_step / max_steps) * 65)
-                    
-                    if real_progress > last_progress:
-                        update_job_progress(job_id, real_progress, f"Step {current_step}/{max_steps}")
-                        last_progress = real_progress
-        except:
-            pass  # Si falla /progress, seguimos con history
+                for item in running:
+                    if len(item) > 2 and item[1] == prompt_id:
+                        # item[2] tiene info del nodo actual
+                        node_info = item[2] if len(item) > 2 else {}
+                        current_step = node_info.get('value', 0)
+                        max_steps = node_info.get('max', total_steps)
+                        
+                        if max_steps > 0 and current_step > last_step:
+                            last_step = current_step
+                            # Mapear steps a progreso: 20% (inicio) a 85% (fin)
+                            real_progress = 20 + int((current_step / max_steps) * 65)
+                            
+                            if real_progress > last_progress:
+                                print(f"📊 [Job {job_id}] Progreso: {real_progress}% - Step {current_step}/{max_steps}")
+                                update_job_progress(job_id, real_progress, f"Step {current_step}/{max_steps}")
+                                last_progress = real_progress
+        except Exception as e:
+            pass  # Si falla, seguimos con history
         
         # Verificar si ComfyUI terminó
         try:
