@@ -742,7 +742,7 @@ Professional ID photo quality."""
         },
         "48": {
             "inputs": {
-                "steps": 20,
+                "steps": 15,  # Reducido para velocidad
                 "denoise": 0.55,
                 "width": 1024,
                 "height": 1024
@@ -953,8 +953,8 @@ High definition, 4K, photorealistic, natural proportions."""
         },
         "48": {
             "inputs": {
-                "steps": 25,
-                "denoise": 1.0,
+                "steps": 20,  # Reducido de 25 para velocidad
+                "denoise": 1.0,  # Full generation
                 "width": 1024,
                 "height": 1536
             },
@@ -1157,10 +1157,10 @@ def execute_flux_direct(job):
         },
         "48": {
             "inputs": {
-                "steps": 20,
-                "denoise": 0.50,
+                "steps": 15,  # 15 steps = ~25% más rápido (antes 20)
+                "denoise": 0.50,  # Mantener bajo para preservar referencias
                 "width": 1024,
-                "height": 1536
+                "height": 1536  # 9:16 aspect ratio
             },
             "class_type": "Flux2Scheduler"
         },
