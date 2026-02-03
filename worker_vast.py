@@ -1212,6 +1212,7 @@ def execute_flux_direct(job):
         },
         "60": {
             "inputs": {
+                "megapixels": 8.3,  # 4K = 2160x3840 = 8.3MP
                 "image": ["42", 0]
             },
             "class_type": "FluxKontextImageScale"
@@ -1277,6 +1278,7 @@ def execute_flux_direct(job):
         # FluxKontextImageScale
         workflow[scale_id] = {
             "inputs": {
+                "megapixels": 8.3,  # 4K = 8.3MP
                 "image": [load_id, 0]
             },
             "class_type": "FluxKontextImageScale"
