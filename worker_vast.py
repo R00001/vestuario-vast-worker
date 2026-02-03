@@ -1213,20 +1213,11 @@ def execute_flux_direct(job):
         last_ref_node = ref_id
         print(f"   📎 Prenda {idx + 1}: {garment_filename}")
     
-    # === EditModelReferenceMethod (multi-ref) ===
-    workflow["65"] = {
-        "inputs": {
-            "conditioning": [last_ref_node, 0],
-            "method": "index"
-        },
-        "class_type": "EditModelReferenceMethod"
-    }
-    
-    # === GUIDER ===
+    # === GUIDER (conecta directamente al último ReferenceLatent) ===
     workflow["22"] = {
         "inputs": {
             "model": ["12", 0],
-            "conditioning": ["65", 0]
+            "conditioning": [last_ref_node, 0]
         },
         "class_type": "BasicGuider"
     }
