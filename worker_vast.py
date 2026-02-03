@@ -1111,12 +1111,16 @@ def execute_flux_direct(job):
     # Encadenados → EditModelReferenceMethod → Guider → Sampler
     # =====================================================
     
+    unet_name = UNET_CONFIG["name"] if UNET_CONFIG else "flux2_dev_fp8mixed.safetensors"
+    unet_dtype = UNET_CONFIG["dtype"] if UNET_CONFIG else "default"
+    print(f"   🔧 [Job {job_id}] Usando modelo: {unet_name} (dtype: {unet_dtype})")
+    
     workflow = {
         # === MODELOS ===
         "12": {
             "inputs": {
-                "unet_name": UNET_CONFIG["name"] if UNET_CONFIG else "flux2_dev_fp8mixed.safetensors",
-                "weight_dtype": UNET_CONFIG["dtype"] if UNET_CONFIG else "default"
+                "unet_name": unet_name,
+                "weight_dtype": unet_dtype
             },
             "class_type": "UNETLoader"
         },
