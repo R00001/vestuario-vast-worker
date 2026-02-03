@@ -43,14 +43,17 @@ echo "   NVFP4 = ~6x más rápido que BF16, calidad casi idéntica"
 echo ""
 
 MODELS_DIR="/workspace/ComfyUI/models/diffusion_models"
-NVFP4_MODEL="flux2-dev-nvfp4-mixed.safetensors"
+NVFP4_MODEL="flux2-dev-nvfp4.safetensors"
 
 if [ ! -f "$MODELS_DIR/$NVFP4_MODEL" ]; then
-  echo "   Descargando $NVFP4_MODEL (~24GB, puede tardar 15-20 min)..."
+  echo "   Descargando $NVFP4_MODEL (NVFP4 puro, ~12GB)..."
   cd "$MODELS_DIR"
-  # Modelo NVFP4 mixto - wget silencioso con solo resumen
+  # Modelo NVFP4 puro = máxima velocidad
   wget --progress=bar:force:noscroll "https://huggingface.co/black-forest-labs/FLUX.2-dev-NVFP4/resolve/main/$NVFP4_MODEL" -O "$NVFP4_MODEL" 2>&1 | tail -n 1 || {
-    echo "⚠️ No se pudo descargar NVFP4, usando fp8 del template..."
+    echo "⚠️ No se pudo descargar NVFP4 puro, probando mixed..."
+    wget --progress=bar:force:noscroll "https://huggingface.co/black-forest-labs/FLUX.2-dev-NVFP4/resolve/main/flux2-dev-nvfp4-mixed.safetensors" -O "flux2-dev-nvfp4-mixed.safetensors" 2>&1 | tail -n 1 || {
+      echo "⚠️ Usando fp8 del template..."
+    }
   }
   cd /workspace
 else
