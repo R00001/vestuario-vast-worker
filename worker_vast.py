@@ -62,6 +62,97 @@ def check_comfy_ready():
     except:
         return False
 
+def update_job_progress(job_id, progress, message=None):
+    """Actualizar progreso del job en Supabase (para Realtime)"""
+    try:
+        update_data = {
+            'progress': min(progress, 99),  # No llegar a 100 hasta completar
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        if message:
+            update_data['result_metadata'] = {'status_message': message}
+        
+        supabase.table('ai_generation_jobs').update(update_data).eq('id', job_id).execute()
+        print(f"📊 [Job {job_id}] Progreso: {progress}% {f'- {message}' if message else ''}")
+    except Exception as e:
+        print(f"⚠️ Error actualizando progreso: {e}")
+
+def get_comfy_queue_progress(prompt_id):
+    """Obtener progreso de ComfyUI via /queue endpoint"""
+    try:
+        resp = requests.get(f"{COMFY_URL}/queue", timeout=5)
+        if resp.status_code == 200:
+            queue = resp.json()
+            # Verificar si nuestro prompt está ejecutándose
+            running = queue.get('queue_running', [])
+            for item in running:
+                if item[1] == prompt_id:
+                    # Item encontrado, está ejecutándose
+                    return {'status': 'running', 'position': 0}
+            
+            pending = queue.get('queue_pending', [])
+            for i, item in enumerate(pending):
+                if item[1] == prompt_id:
+                    return {'status': 'pending', 'position': i + 1}
+            
+            # No está en cola, probablemente terminó
+            return {'status': 'completed', 'position': 0}
+    except:
+        pass
+    return {'status': 'unknown', 'position': 0}
+
+def wait_for_comfy_result(job_id, prompt_id, output_node_id, max_wait=180, total_steps=20):
+    """
+    Esperar resultado de ComfyUI con actualizaciones de progreso
+    Envía updates cada 3 segundos basado en el progreso estimado
+    """
+    waited = 0
+    last_progress = 10
+    
+    while waited < max_wait:
+        time.sleep(3)
+        waited += 3
+        
+        # Calcular progreso estimado (10% inicio, 85% durante generación)
+        # Basado en tiempo: asumimos que la generación tarda ~60s para 20 steps
+        estimated_progress = min(10 + int((waited / 60) * 75), 85)
+        
+        # Solo actualizar si el progreso cambió significativamente (>5%)
+        if estimated_progress - last_progress >= 5:
+            update_job_progress(job_id, estimated_progress, f"Generando... {waited}s")
+            last_progress = estimated_progress
+        
+        # Verificar si ComfyUI terminó
+        try:
+            hist_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=10)
+            history = hist_resp.json()
+            
+            if prompt_id in history:
+                outputs = history[prompt_id].get('outputs', {})
+                
+                if output_node_id in outputs and outputs[output_node_id].get('images'):
+                    image_info = outputs[output_node_id]['images'][0]
+                    result_filename = image_info['filename']
+                    result_subfolder = image_info.get('subfolder', '')
+                    
+                    result_path = f"/workspace/ComfyUI/output/{result_subfolder}/{result_filename}" if result_subfolder else f"/workspace/ComfyUI/output/{result_filename}"
+                    
+                    update_job_progress(job_id, 90, "Procesando resultado...")
+                    return result_path
+                
+                # Verificar errores
+                status = history[prompt_id].get('status', {})
+                if status.get('status_str') == 'error':
+                    error_msg = status.get('messages', [['', 'Error desconocido']])[0][1]
+                    raise Exception(f"ComfyUI error: {error_msg}")
+                
+                if status.get('completed', False):
+                    raise Exception("ComfyUI completó pero no hay output en el nodo esperado")
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Error consultando history: {e}")
+    
+    raise Exception(f"Timeout esperando resultado ({max_wait}s)")
+
 def download_image(url, local_path):
     """Descargar imagen de URL a filesystem local"""
     try:
@@ -390,42 +481,22 @@ Professional ID photo quality."""
     }
     
     # Enviar a ComfyUI
-    payload = {"prompt": workflow}
+    update_job_progress(job_id, 15, "Enviando a GPU...")
     
+    payload = {"prompt": workflow}
     resp = requests.post(f"{COMFY_URL}/prompt", json=payload, timeout=60)
     resp.raise_for_status()
     
     prompt_id = resp.json()['prompt_id']
     print(f"📤 [Job {job_id}] ComfyUI prompt_id: {prompt_id}")
     
-    # Esperar resultado
-    max_wait = 120  # 2 minutos para face
-    waited = 0
+    update_job_progress(job_id, 20, "Procesando en GPU...")
     
-    while waited < max_wait:
-        time.sleep(3)
-        waited += 3
-        
-        hist_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=10)
-        history = hist_resp.json()
-        
-        if prompt_id in history:
-            outputs = history[prompt_id].get('outputs', {})
-            
-            if '9' in outputs and outputs['9'].get('images'):
-                image_info = outputs['9']['images'][0]
-                result_filename = image_info['filename']
-                result_subfolder = image_info.get('subfolder', '')
-                
-                result_path = f"/workspace/ComfyUI/output/{result_subfolder}/{result_filename}" if result_subfolder else f"/workspace/ComfyUI/output/{result_filename}"
-                
-                print(f"✅ [Job {job_id}] Face enhancement completado: {result_path}")
-                return result_path
-            
-            if history[prompt_id].get('status', {}).get('completed', False):
-                raise Exception("ComfyUI completó pero no hay output")
+    # Esperar resultado con actualizaciones de progreso
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=120, total_steps=20)
     
-    raise Exception(f"Face enhancement timeout ({max_wait}s)")
+    print(f"✅ [Job {job_id}] Face enhancement completado: {result_path}")
+    return result_path
 
 
 def execute_avatar_generation(job):
@@ -630,42 +701,22 @@ High definition, 4K, photorealistic, natural proportions."""
     }
     
     # Enviar a ComfyUI
-    payload = {"prompt": workflow}
+    update_job_progress(job_id, 15, "Enviando a GPU...")
     
+    payload = {"prompt": workflow}
     resp = requests.post(f"{COMFY_URL}/prompt", json=payload, timeout=60)
     resp.raise_for_status()
     
     prompt_id = resp.json()['prompt_id']
     print(f"📤 [Job {job_id}] ComfyUI prompt_id: {prompt_id}")
     
-    # Esperar resultado
-    max_wait = 180  # 3 minutos para avatar completo
-    waited = 0
+    update_job_progress(job_id, 20, "Generando avatar...")
     
-    while waited < max_wait:
-        time.sleep(3)
-        waited += 3
-        
-        hist_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=10)
-        history = hist_resp.json()
-        
-        if prompt_id in history:
-            outputs = history[prompt_id].get('outputs', {})
-            
-            if '9' in outputs and outputs['9'].get('images'):
-                image_info = outputs['9']['images'][0]
-                result_filename = image_info['filename']
-                result_subfolder = image_info.get('subfolder', '')
-                
-                result_path = f"/workspace/ComfyUI/output/{result_subfolder}/{result_filename}" if result_subfolder else f"/workspace/ComfyUI/output/{result_filename}"
-                
-                print(f"✅ [Job {job_id}] Avatar base generado: {result_path}")
-                return result_path
-            
-            if history[prompt_id].get('status', {}).get('completed', False):
-                raise Exception("ComfyUI completó pero no hay output")
+    # Esperar resultado con actualizaciones de progreso (25 steps, ~70s)
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=180, total_steps=25)
     
-    raise Exception(f"Avatar generation timeout ({max_wait}s)")
+    print(f"✅ [Job {job_id}] Avatar base generado: {result_path}")
+    return result_path
 
 
 def execute_flux_direct(job):
@@ -940,38 +991,13 @@ def execute_flux_direct(job):
     
     print(f"✅ [Job {job_id}] Workflow enviado a ComfyUI, prompt_id: {prompt_id}")
     
-    # Polling hasta que complete
-    max_wait = 300
-    start_time = time.time()
+    update_job_progress(job_id, 20, "Procesando en GPU...")
     
-    while (time.time() - start_time) < max_wait:
-        try:
-            history_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=5)
-            history = history_resp.json()
-            
-            if prompt_id in history:
-                outputs = history[prompt_id].get("outputs", {})
-                
-                if "9" in outputs and "images" in outputs["9"]:
-                    images = outputs["9"]["images"]
-                    if len(images) > 0:
-                        filename = images[0]["filename"]
-                        subfolder = images[0].get("subfolder", "")
-                        
-                        result_path = f"/workspace/ComfyUI/output/{subfolder}/{filename}" if subfolder else f"/workspace/ComfyUI/output/{filename}"
-                        
-                        if Path(result_path).exists():
-                            print(f"✅ [Job {job_id}] Imagen generada: {result_path}")
-                            return result_path
-                
-                raise Exception("Workflow completó pero sin imagen")
-            
-            time.sleep(3)
-        except requests.exceptions.RequestException as e:
-            print(f"⚠️ [Job {job_id}] Error consultando ComfyUI: {e}")
-            time.sleep(3)
+    # Esperar resultado con actualizaciones de progreso
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=300, total_steps=20)
     
-    raise Exception(f"Timeout esperando resultado ({max_wait}s)")
+    print(f"✅ [Job {job_id}] Imagen generada: {result_path}")
+    return result_path
 
 def upload_result_to_supabase(job_id, user_id, result_path):
     """Subir resultado a Supabase Storage"""
