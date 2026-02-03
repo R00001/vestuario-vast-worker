@@ -1157,10 +1157,10 @@ def execute_flux_direct(job):
         },
         "48": {
             "inputs": {
-                "steps": 15,  # 15 steps = ~25% más rápido (antes 20)
-                "denoise": 0.50,  # Mantener bajo para preservar referencias
+                "steps": 8,  # 8 steps = rápido y suficiente calidad
+                "denoise": 0.50,  # Bajo para preservar referencias
                 "width": 1024,
-                "height": 1536  # 9:16 aspect ratio
+                "height": 1536  # 9:16
             },
             "class_type": "Flux2Scheduler"
         },
