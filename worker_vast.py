@@ -36,24 +36,10 @@ WORKER_CONFIG = {
 }
 
 # ============================================
-# CONFIGURACIÓN DE MODELO (optimizado para 96GB VRAM)
+# CONFIGURACIÓN DE MODELO
 # ============================================
-def get_optimal_unet_config():
-    """Detecta el mejor modelo disponible para la GPU"""
-    models_dir = "/workspace/ComfyUI/models/diffusion_models"
-    
-    # Prioridad: bf16 > fp8 (bf16 es más rápido en GPUs con mucha VRAM)
-    if os.path.exists(f"{models_dir}/flux2_dev_bf16.safetensors"):
-        print("⚡ Usando modelo bf16 (máxima velocidad para 96GB VRAM)")
-        return {"name": "flux2_dev_bf16.safetensors", "dtype": "bf16"}
-    elif os.path.exists(f"{models_dir}/flux2_dev_fp8mixed.safetensors"):
-        print("📦 Usando modelo fp8 (cuantizado)")
-        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
-    else:
-        # Fallback al modelo por defecto
-        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
-
-UNET_CONFIG = None  # Se inicializa después de verificar ComfyUI
+# Usar fp8 que viene con el template (más pequeño, funciona bien)
+UNET_CONFIG = {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
 
 print(f"""
 ╔═══════════════════════════════════════════════╗
@@ -1551,11 +1537,7 @@ def main_loop():
     
     print(f"✅ ComfyUI READY en {COMFY_URL}")
     print("   Modelos cargados, listo para procesar jobs")
-    
-    # Detectar mejor modelo para esta GPU
-    global UNET_CONFIG
-    UNET_CONFIG = get_optimal_unet_config()
-    print(f"   Modelo: {UNET_CONFIG['name']} (dtype: {UNET_CONFIG['dtype']})")
+    print(f"   Modelo: {UNET_CONFIG['name']}")
     
     # Marcar instancia como ready
     mark_instance_ready()
