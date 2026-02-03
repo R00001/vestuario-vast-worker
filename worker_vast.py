@@ -45,16 +45,30 @@ def get_optimal_unet_config():
     """Detecta el mejor modelo disponible (prioriza NVFP4 = 6x más rápido)"""
     models_dir = "/workspace/ComfyUI/models/diffusion_models"
     
-    # NVFP4 = ~6x más rápido que BF16 con calidad casi idéntica
+    # Listar modelos disponibles
+    print(f"\n🔍 Buscando modelos en: {models_dir}")
+    if os.path.exists(models_dir):
+        models = [f for f in os.listdir(models_dir) if f.endswith('.safetensors')]
+        print(f"   Modelos encontrados: {models}")
+    else:
+        print(f"   ⚠️ Directorio no existe!")
+        models = []
+    
+    # Prioridad: NVFP4 > bf16 > fp8
     if os.path.exists(f"{models_dir}/flux2-dev-nvfp4-mixed.safetensors"):
+        print("   ⚡ Seleccionado: NVFP4-mixed (6x más rápido)")
         return {"name": "flux2-dev-nvfp4-mixed.safetensors", "dtype": "default"}
     elif os.path.exists(f"{models_dir}/flux2-dev-nvfp4.safetensors"):
+        print("   ⚡ Seleccionado: NVFP4 puro")
         return {"name": "flux2-dev-nvfp4.safetensors", "dtype": "default"}
     elif os.path.exists(f"{models_dir}/flux2_dev_bf16.safetensors"):
+        print("   📦 Seleccionado: bf16")
         return {"name": "flux2_dev_bf16.safetensors", "dtype": "default"}
     elif os.path.exists(f"{models_dir}/flux2_dev_fp8mixed.safetensors"):
+        print("   📦 Seleccionado: fp8 (del template)")
         return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "fp8_e4m3fn_fast"}
     else:
+        print("   ⚠️ Ningún modelo encontrado, usando default")
         return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
 
 # Se inicializa al arrancar

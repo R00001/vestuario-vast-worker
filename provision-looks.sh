@@ -62,6 +62,12 @@ fi
 
 echo "✅ [$(date)] Modelo optimizado listo"
 
+# Listar modelos disponibles para debug
+echo ""
+echo "📋 Modelos en $MODELS_DIR:"
+ls -lh "$MODELS_DIR"/*.safetensors 2>/dev/null || echo "   (ninguno encontrado)"
+echo ""
+
 # ============================================================
 # PASO 1.5: Instalar Custom Nodes para FLUX.2 Multi-Reference
 # ============================================================
