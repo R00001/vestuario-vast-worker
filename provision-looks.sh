@@ -35,6 +35,45 @@ echo "   Ejecutando flux.2-dev.sh del template..."
 echo "✅ [$(date)] Provisioning del template completado"
 
 # ============================================================
+# PASO 1.5: Instalar Custom Nodes para FLUX.2 Multi-Reference
+# ============================================================
+echo ""
+echo "🔧 PASO 1.5: Instalando Custom Nodes para FLUX.2..."
+echo ""
+
+cd /workspace/ComfyUI/custom_nodes
+
+# ComfyUI-FLUX-Kontext-Nodes (contiene ReferenceLatent, etc.)
+if [ ! -d "ComfyUI-FLUX" ]; then
+  echo "   Instalando ComfyUI-FLUX..."
+  git clone https://github.com/city96/ComfyUI-FLUX.git 2>/dev/null || echo "   ComfyUI-FLUX ya existe o no disponible"
+fi
+
+# ComfyUI-KJNodes (utilidades adicionales)
+if [ ! -d "ComfyUI-KJNodes" ]; then
+  echo "   Instalando ComfyUI-KJNodes..."
+  git clone https://github.com/kijai/ComfyUI-KJNodes.git 2>/dev/null || echo "   ComfyUI-KJNodes ya existe o no disponible"
+fi
+
+# ComfyUI-Image-Combiner (para concatenar imágenes)
+if [ ! -d "ComfyUI-Image-Combiner" ]; then
+  echo "   Instalando ComfyUI-Image-Combiner..."
+  git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git 2>/dev/null || echo "   Custom-Scripts ya existe o no disponible"
+fi
+
+# Instalar dependencias de custom nodes
+for dir in */; do
+  if [ -f "${dir}requirements.txt" ]; then
+    echo "   Instalando deps para ${dir}..."
+    pip install -r "${dir}requirements.txt" 2>/dev/null || true
+  fi
+done
+
+cd /workspace
+
+echo "✅ [$(date)] Custom nodes instalados"
+
+# ============================================================
 # PASO 2: Instalar nuestro worker
 # ============================================================
 echo ""

@@ -411,6 +411,83 @@ def determine_auto_background(products):
     return "clean studio, neutral tones, professional lighting"
 
 
+def build_concat_tryon_prompt(products_metadata, settings, avatar_info, num_garments):
+    """
+    Construir prompt para imagen concatenada (Avatar + Prendas lado a lado)
+    FLUX.2 verá la imagen completa y seguirá las instrucciones
+    """
+    
+    # Descripción del avatar
+    model_desc = "person"
+    if avatar_info:
+        facial = avatar_info.get('grok_facial_features', {})
+        body = avatar_info.get('grok_body_analysis', {})
+        gender = facial.get('gender_presentation', 'person')
+        model_desc = f"{gender}"
+        if body.get('body_type'):
+            model_desc += f" with {body.get('body_type')} build"
+    
+    # Describir prendas por posición
+    garment_descriptions = []
+    for idx, product in enumerate(products_metadata):
+        name = product.get('name', 'clothing item')
+        category = product.get('category', 'item')
+        position = idx + 2  # 2, 3, 4... (1 es avatar)
+        
+        if num_garments == 1:
+            pos_desc = "on the right side"
+        else:
+            if idx == 0:
+                pos_desc = "second from left"
+            elif idx == num_garments - 1:
+                pos_desc = "on the far right"
+            else:
+                pos_desc = f"in position {position}"
+        
+        garment_descriptions.append(f"- {name} ({category}) shown {pos_desc}")
+    
+    # Background y settings
+    bg_desc = "pure white seamless studio background"
+    pose_desc = "standing straight, facing camera, arms relaxed"
+    lighting_desc = "soft professional studio lighting"
+    color_accent = ""
+    
+    if settings:
+        bg = settings.get('background', {})
+        if bg.get('prompt_addon'):
+            bg_desc = bg.get('prompt_addon')
+        if settings.get('backgroundColor') and settings.get('backgroundColor') != '#FFFFFF':
+            color_accent = f"\nAmbient color accent: {settings.get('backgroundColor')}"
+        if settings.get('pose', {}).get('prompt_addon'):
+            pose_desc = settings['pose']['prompt_addon']
+        if settings.get('lighting', {}).get('prompt_addon'):
+            lighting_desc = settings['lighting']['prompt_addon']
+    
+    prompt = f"""This is a composite reference image showing multiple elements side by side.
+
+LEFT SIDE: A {model_desc} (the avatar/model) wearing basic neutral clothing.
+RIGHT SIDE(S): Product images of clothing items to apply:
+{chr(10).join(garment_descriptions)}
+
+TASK: Generate a NEW single image of ONLY the person from the LEFT, now wearing ALL the clothing items shown on the RIGHT.
+
+CRITICAL REQUIREMENTS:
+1. OUTPUT must show ONLY the person, NOT the original composite layout
+2. PRESERVE the exact face, skin tone, body shape, and proportions from the left avatar
+3. APPLY each garment exactly as shown in its reference (same colors, patterns, design, fit)
+4. Garments must fit naturally on the body with realistic folds and draping
+5. Full body visible from head to feet in portrait orientation (9:16 ratio)
+
+SCENE:
+- Background: {bg_desc}{color_accent}
+- Pose: {pose_desc}
+- Lighting: {lighting_desc}
+
+STYLE: Fashion photography, commercial quality, 4K sharp focus, photorealistic."""
+    
+    return prompt
+
+
 def render_tryon_prompt(prompt_data):
     """Renderizar promptData a texto para FLUX.2"""
     subject = prompt_data["subject"]
@@ -933,26 +1010,24 @@ High definition, 4K, photorealistic, natural proportions."""
 def execute_flux_direct(job):
     """
     Ejecutar workflow de ComfyUI para try-on con FLUX.2
-    SOLO NODOS NATIVOS - Sin custom nodes
-    Las imágenes se concatenan horizontalmente y el prompt referencia @image 1, @image 2, etc.
+    Método: Imagen concatenada + img2img
+    FLUX.2 ve todas las imágenes y sigue el prompt para combinarlas
     """
     
     job_id = job['id']
     
-    print(f"🎬 [Job {job_id}] Ejecutando workflow ComfyUI (FLUX.2 - Nodos Nativos)...")
+    print(f"🎬 [Job {job_id}] Ejecutando try-on FLUX.2 (imagen concatenada)...")
     
-    # Directorio input de ComfyUI
     COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
     Path(COMFY_INPUT_DIR).mkdir(parents=True, exist_ok=True)
     
     # 1. Descargar avatar
     avatar_url = job['input_data']['avatar_url']
     avatar_path = f"{COMFY_INPUT_DIR}/avatar_{job_id}.jpg"
-    
     print(f"📥 [Job {job_id}] Descargando avatar...")
     download_image(avatar_url, avatar_path)
     
-    # 2. Descargar prendas (hasta 5)
+    # 2. Descargar prendas
     MAX_PRODUCTS = 5
     garments = job['input_data'].get('garment_images', [])
     garment_paths = []
@@ -964,41 +1039,42 @@ def execute_flux_direct(job):
         path = f"{COMFY_INPUT_DIR}/garment_{job_id}_{idx}.jpg"
         download_image(garment['url'], path)
         garment_paths.append(path)
-        print(f"   → @image {idx + 2}: garment_{job_id}_{idx}.jpg")
     
-    # 3. CONCATENAR imágenes horizontalmente (Avatar + Prendas)
+    # 3. CONCATENAR: Avatar (izquierda) + Prendas (derecha)
     all_paths = [avatar_path] + garment_paths
     concat_filename = f"concat_{job_id}.jpg"
     concat_path = f"{COMFY_INPUT_DIR}/{concat_filename}"
     
-    print(f"\n🖼️ [Job {job_id}] Concatenando {len(all_paths)} imágenes...")
+    print(f"🖼️ [Job {job_id}] Concatenando {len(all_paths)} imágenes...")
     concatenate_images_for_flux(all_paths, concat_path, target_height=1024)
     
-    # 4. Obtener settings y avatar info
+    # 4. Obtener info
     settings = job['input_data'].get('settings', None)
     avatar_info = None
     try:
         user_id = job['user_id']
-        avatar_response = supabase.table('virtual_avatars').select(
+        resp = supabase.table('virtual_avatars').select(
             'grok_facial_features, grok_body_analysis'
         ).eq('user_id', user_id).maybe_single().execute()
-        if avatar_response.data:
-            avatar_info = avatar_response.data
+        if resp.data:
+            avatar_info = resp.data
     except Exception as e:
-        print(f"⚠️ [Job {job_id}] No se pudo obtener avatar info: {e}")
+        print(f"⚠️ [Job {job_id}] No avatar info: {e}")
     
-    # 5. Construir prompt
+    # 5. Construir prompt para imagen concatenada
     products_metadata = job['input_data'].get('products_metadata', [])[:MAX_PRODUCTS]
-    prompt = build_tryon_prompt_comfyui(products_metadata, settings, avatar_info)
     
-    print(f"\n📝 [Job {job_id}] PROMPT:")
-    print(prompt[:500] + "..." if len(prompt) > 500 else prompt)
+    # Prompt específico para imagen concatenada
+    prompt = build_concat_tryon_prompt(products_metadata, settings, avatar_info, len(garment_paths))
+    
+    print(f"\n📝 [Job {job_id}] PROMPT:\n{prompt[:600]}...")
     
     seed = int(time.time()) % 999999999
     
     # =====================================================
-    # WORKFLOW FLUX.2 - SOLO NODOS NATIVOS
-    # Imagen concatenada → Scale → VAEEncode → Sampler → VAEDecode
+    # WORKFLOW: Img2Img con imagen concatenada
+    # La imagen concatenada contiene toda la info visual
+    # El prompt indica cómo combinar las partes
     # =====================================================
     
     workflow = {
@@ -1035,13 +1111,13 @@ def execute_flux_direct(job):
         },
         "26": {
             "inputs": {
-                "guidance": 3.5,
+                "guidance": 4.0,
                 "conditioning": ["6", 0]
             },
             "class_type": "FluxGuidance"
         },
         
-        # === IMAGEN CONCATENADA: Load → Scale → VAEEncode ===
+        # === IMAGEN CONCATENADA ===
         "42": {
             "inputs": {
                 "image": concat_filename,
@@ -1049,25 +1125,8 @@ def execute_flux_direct(job):
             },
             "class_type": "LoadImage"
         },
-        "41": {
-            "inputs": {
-                "upscale_method": "lanczos",
-                "megapixels": 1.5,
-                "sharpen": 0.5,
-                "resolution_steps": 64,
-                "image": ["42", 0]
-            },
-            "class_type": "ImageScaleToTotalPixels"
-        },
-        "40": {
-            "inputs": {
-                "pixels": ["41", 0],
-                "vae": ["10", 0]
-            },
-            "class_type": "VAEEncode"
-        },
         
-        # === GUIDER (directo del FluxGuidance) ===
+        # === GUIDER ===
         "22": {
             "inputs": {
                 "model": ["12", 0],
@@ -1091,15 +1150,15 @@ def execute_flux_direct(job):
         },
         "48": {
             "inputs": {
-                "steps": 20,
-                "denoise": 0.65,
+                "steps": 25,
+                "denoise": 0.70,
                 "width": 1024,
-                "height": 1536  # 9:16 ratio para output
+                "height": 1536
             },
             "class_type": "Flux2Scheduler"
         },
         
-        # === LATENT VACÍO para output 9:16 ===
+        # === LATENT 9:16 ===
         "47": {
             "inputs": {
                 "width": 1024,
@@ -1116,12 +1175,12 @@ def execute_flux_direct(job):
                 "guider": ["22", 0],
                 "sampler": ["16", 0],
                 "sigmas": ["48", 0],
-                "latent_image": ["47", 0]  # Latent vacío 9:16
+                "latent_image": ["47", 0]
             },
             "class_type": "SamplerCustomAdvanced"
         },
         
-        # === VAE DECODE ===
+        # === DECODE ===
         "8": {
             "inputs": {
                 "samples": ["13", 0],
@@ -1130,7 +1189,7 @@ def execute_flux_direct(job):
             "class_type": "VAEDecode"
         },
         
-        # === SAVE IMAGE ===
+        # === SAVE ===
         "9": {
             "inputs": {
                 "filename_prefix": f"tryon_{job_id}",
@@ -1140,12 +1199,9 @@ def execute_flux_direct(job):
         }
     }
     
-    print(f"\n📊 [Job {job_id}] Workflow (nodos nativos):")
-    print(f"   Input: {concat_filename} (imagen concatenada)")
-    print(f"   @image 1: Avatar")
-    for idx in range(len(garment_paths)):
-        print(f"   @image {idx+2}: Prenda {idx+1}")
-    print(f"   Output: 1024x1536 (9:16)")
+    print(f"\n📊 [Job {job_id}] Workflow ready:")
+    print(f"   Input: {concat_filename}")
+    print(f"   Output: 1024x1536")
     
     # Enviar a ComfyUI (formato correcto según docs)
     payload = {
