@@ -46,14 +46,11 @@ MODELS_DIR="/workspace/ComfyUI/models/diffusion_models"
 NVFP4_MODEL="flux2-dev-nvfp4-mixed.safetensors"
 
 if [ ! -f "$MODELS_DIR/$NVFP4_MODEL" ]; then
-  echo "   Descargando $NVFP4_MODEL desde HuggingFace..."
+  echo "   Descargando $NVFP4_MODEL (~24GB, puede tardar 15-20 min)..."
   cd "$MODELS_DIR"
-  # Modelo NVFP4 mixto (más estable que puro NVFP4)
-  wget -q --show-progress "https://huggingface.co/black-forest-labs/FLUX.2-dev-NVFP4/resolve/main/$NVFP4_MODEL" -O "$NVFP4_MODEL" || {
-    echo "⚠️ No se pudo descargar NVFP4, probando bf16..."
-    wget -q --show-progress "https://huggingface.co/black-forest-labs/FLUX.2-dev/resolve/main/flux2_dev_bf16.safetensors" -O "flux2_dev_bf16.safetensors" || {
-      echo "⚠️ Usando fp8 del template..."
-    }
+  # Modelo NVFP4 mixto - wget silencioso con solo resumen
+  wget --progress=bar:force:noscroll "https://huggingface.co/black-forest-labs/FLUX.2-dev-NVFP4/resolve/main/$NVFP4_MODEL" -O "$NVFP4_MODEL" 2>&1 | tail -n 1 || {
+    echo "⚠️ No se pudo descargar NVFP4, usando fp8 del template..."
   }
   cd /workspace
 else
