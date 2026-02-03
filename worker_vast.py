@@ -1197,10 +1197,10 @@ def execute_flux_direct(job):
         },
         "48": {
             "inputs": {
-                "steps": 25,  # 25 steps = alta calidad
-                "denoise": 0.50,  # Bajo para preservar referencias
-                "width": 1440,
-                "height": 2560  # 2K HD 9:16
+                "steps": 14,  # 25 steps = alta calidad
+                "denoise": 0.25,  # Bajo para preservar referencias
+                "width": 576,
+                "height": 1024  # 2K HD 9:16
             },
             "class_type": "Flux2Scheduler"
         },
