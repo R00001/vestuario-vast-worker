@@ -1249,7 +1249,7 @@ def execute_flux_direct(job):
         "48": {
             "inputs": {
                 "steps": 30,  # MÁXIMA CALIDAD
-                "denoise": 0.35,  # Balance: fidelidad + limpieza
+                "denoise": 0.25,  # Punto medio: fidelidad + limpieza
                 "width": 1080,
                 "height": 1920  # 2K Full HD 9:16
             },
