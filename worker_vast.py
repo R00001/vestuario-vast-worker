@@ -557,10 +557,17 @@ SCENE CONFIGURATION:
 - Model pose: {scene['pose']}
 - Lighting: {scene['lighting']}
 
+CRITICAL - GARMENT FIDELITY (DO NOT MODIFY):
+- Each garment must be PIXEL-PERFECT replica of its reference image
+- Preserve EXACT: colors, patterns, textures, prints, logos, buttons, zippers
+- NO reinterpretation, NO redesign, NO color shifting
+- Copy garment EXACTLY as shown in reference
+
 PRESERVATION REQUIREMENTS:
 - Face: Preserve EXACT facial features, expression, skin tone from {subject['base_image']}
 - Body: Maintain identical proportions and physique
 - Identity: Person must be recognizable as same individual
+- Hands: Natural position, correct finger count
 
 TECHNICAL SPECIFICATIONS:
 - Quality: {technical['quality']}
@@ -1146,7 +1153,7 @@ def execute_flux_direct(job):
         },
         "26": {
             "inputs": {
-                "guidance": 3.5,
+                "guidance": 6.0,  # Más alto = más fiel al prompt/referencias
                 "conditioning": ["6", 0]
             },
             "class_type": "FluxGuidance"
