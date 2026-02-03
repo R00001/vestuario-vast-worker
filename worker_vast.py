@@ -14,6 +14,8 @@ from datetime import datetime
 from supabase import create_client, Client
 import base64
 from pathlib import Path
+from PIL import Image
+from io import BytesIO
 
 # ============================================
 # CONFIGURACIÓN
@@ -180,6 +182,55 @@ def download_image(url, local_path):
     except Exception as e:
         print(f"❌ Error descargando {url}: {e}")
         raise
+
+
+def concatenate_images_horizontal(image_paths, output_path, target_height=1024):
+    """
+    Concatenar múltiples imágenes horizontalmente para FLUX.2 Edit
+    Cada imagen será @image 1, @image 2, etc. en el prompt
+    
+    Args:
+        image_paths: Lista de paths a imágenes locales
+        output_path: Path donde guardar la imagen concatenada
+        target_height: Altura objetivo (mantiene aspect ratio)
+    
+    Returns:
+        output_path si exitoso
+    """
+    if not image_paths:
+        raise ValueError("No hay imágenes para concatenar")
+    
+    # Cargar todas las imágenes
+    images = []
+    for path in image_paths:
+        img = Image.open(path).convert('RGB')
+        images.append(img)
+    
+    # Redimensionar todas a la misma altura manteniendo aspect ratio
+    resized_images = []
+    for img in images:
+        ratio = target_height / img.height
+        new_width = int(img.width * ratio)
+        resized = img.resize((new_width, target_height), Image.Resampling.LANCZOS)
+        resized_images.append(resized)
+    
+    # Calcular ancho total
+    total_width = sum(img.width for img in resized_images)
+    
+    # Crear imagen concatenada
+    concat_img = Image.new('RGB', (total_width, target_height))
+    
+    # Pegar cada imagen
+    x_offset = 0
+    for img in resized_images:
+        concat_img.paste(img, (x_offset, 0))
+        x_offset += img.width
+    
+    # Guardar
+    concat_img.save(output_path, 'JPEG', quality=95)
+    print(f"   📎 Imagen concatenada: {len(image_paths)} imágenes → {total_width}x{target_height}px")
+    
+    return output_path
 
 def upload_to_storage(job_id, user_id, image_base64):
     """Subir imagen a Supabase Storage"""
@@ -918,7 +969,7 @@ def execute_flux_direct(job):
     # 2. Descargar prendas (Avatar + hasta 5 productos)
     MAX_PRODUCTS = 5  # Máximo 5 productos (@image 2-6)
     garments = job['input_data'].get('garment_images', [])
-    garment_filenames = []
+    garment_paths = []
     
     products_to_process = min(len(garments), MAX_PRODUCTS)
     print(f"👗 [Job {job_id}] Procesando {products_to_process} de {len(garments)} productos")
@@ -928,10 +979,20 @@ def execute_flux_direct(job):
         path = f"{COMFY_INPUT_DIR}/{filename}"
         print(f"📥 [Job {job_id}] Descargando prenda {idx + 1}/{products_to_process}...")
         download_image(garment['url'], path)
-        garment_filenames.append(filename)
+        garment_paths.append(path)
         print(f"   → @image {idx + 2}: {filename}")
     
-    # 3. Obtener settings del job (background, pose, lighting, colors)
+    # 3. CONCATENAR todas las imágenes horizontalmente para FLUX.2 Edit
+    # Orden: Avatar (@image 1) + Prendas (@image 2, 3, 4...)
+    all_image_paths = [avatar_path] + garment_paths
+    concat_filename = f"concat_{job_id}.jpg"
+    concat_path = f"{COMFY_INPUT_DIR}/{concat_filename}"
+    
+    print(f"\n🖼️ [Job {job_id}] Concatenando {len(all_image_paths)} imágenes...")
+    concatenate_images_horizontal(all_image_paths, concat_path, target_height=1024)
+    print(f"   → Imagen combinada: {concat_filename}")
+    
+    # 4. Obtener settings del job (background, pose, lighting, colors)
     settings = job['input_data'].get('settings', None)
     if settings:
         print(f"\n⚙️ [Job {job_id}] Settings de try-on:")
@@ -940,7 +1001,7 @@ def execute_flux_direct(job):
         print(f"   Pose: {settings.get('pose', {}).get('id', 'default')}")
         print(f"   Lighting: {settings.get('lighting', {}).get('id', 'default')}")
     
-    # 4. Obtener info del avatar (para descripción del modelo)
+    # 5. Obtener info del avatar (para descripción del modelo)
     avatar_info = None
     try:
         user_id = job['user_id']
@@ -959,17 +1020,18 @@ def execute_flux_direct(job):
     except Exception as e:
         print(f"⚠️ [Job {job_id}] No se pudo obtener avatar info: {e}")
     
-    # 5. Construir prompt dinámico con toda la info
+    # 6. Construir prompt dinámico con toda la info
     products_metadata = job['input_data'].get('products_metadata', [])[:MAX_PRODUCTS]
     prompt = build_tryon_prompt_comfyui(products_metadata, settings, avatar_info)
     
     print(f"\n📝 [Job {job_id}] ==================== PROMPT ESTRUCTURADO ====================")
     print(prompt)
     print(f"📝 [Job {job_id}] ==============================================================")
-    print(f"\n📊 [Job {job_id}] Resumen de imágenes:")
-    print(f"   @image 1: Avatar base ({avatar_filename})")
-    for idx, (filename, meta) in enumerate(zip(garment_filenames, products_metadata)):
-        print(f"   @image {idx + 2}: {meta.get('name', 'producto')} ({meta.get('category', 'N/A')}) → {filename}")
+    print(f"\n📊 [Job {job_id}] Resumen de imágenes concatenadas:")
+    print(f"   @image 1: Avatar base")
+    for idx, meta in enumerate(products_metadata):
+        print(f"   @image {idx + 2}: {meta.get('name', 'producto')} ({meta.get('category', 'N/A')})")
+    print(f"   → Total: {len(all_image_paths)} imágenes en {concat_filename}")
     
     # Usar ComfyUI que ya está cargado por el template
     print(f"🎬 [Job {job_id}] Generando con ComfyUI (FLUX.2)...")
@@ -1019,10 +1081,11 @@ def execute_flux_direct(job):
             "class_type": "FluxGuidance"
         },
         
-        # === AVATAR: LoadImage → Scale → VAEEncode ===
+        # === IMAGEN CONCATENADA: LoadImage → Scale → VAEEncode ===
+        # La imagen contiene: Avatar (@image 1) + Prendas (@image 2, 3, ...)
         "42": {
             "inputs": {
-                "image": avatar_filename,
+                "image": concat_filename,
                 "upload": "image"
             },
             "class_type": "LoadImage"
@@ -1071,9 +1134,7 @@ def execute_flux_direct(job):
         # El latente del avatar (nodo 40) se usa directamente en el sampler
     }
     
-    # === GUIDER (directo, las prendas van descritas en el prompt) ===
-    # NOTA: ReferenceLatent no existe en ComfyUI estándar
-    # Para FLUX.2, las prendas se describen en el texto del prompt
+    # === GUIDER (directo, imagen concatenada incluye todas las referencias) ===
     workflow["22"] = {
         "inputs": {
             "model": ["12", 0],
@@ -1082,7 +1143,7 @@ def execute_flux_direct(job):
         "class_type": "BasicGuider"
     }
     
-    print(f"   📎 Prendas descritas en prompt: {len(garment_filenames)} items")
+    print(f"   📎 Imagen concatenada con {len(all_image_paths)} referencias")
     
     # === SAMPLER CUSTOM ADVANCED (img2img - usa latente del avatar) ===
     workflow["13"] = {
