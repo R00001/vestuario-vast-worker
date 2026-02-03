@@ -211,32 +211,211 @@ def upload_to_storage(job_id, user_id, image_base64):
         # Fallback: retornar data URI
         return f"data:image/jpeg;base64,{image_base64}"
 
-def build_tryon_prompt_comfyui(products_metadata):
+def build_tryon_prompt_comfyui(products_metadata, settings=None, avatar_info=None):
     """
-    Construir prompt para ComfyUI (sin formato @image)
-    ComfyUI usa LoadImage + ReferenceLatent, no texto con @image
+    ============================================
+    PROMPT BUILDER - Try-On Profesional (ComfyUI)
+    ============================================
+    
+    Genera prompts estructurados para FLUX.2 via ComfyUI
+    Soporta: Avatar + N productos (1-5)
+    
+    Estructura JSON interna:
+    {
+        "subject": { "model_description", "base_clothing" },
+        "garments": [{ "index", "name", "category", "instruction" }],
+        "scene": { "background", "color_accent", "pose", "lighting" },
+        "technical": { "quality", "format" }
+    }
+    
+    Args:
+        products_metadata: Lista de productos (máx 5)
+        settings: Config de background, pose, lighting, colors
+        avatar_info: Grok analysis del avatar
+    
+    Returns:
+        str: Prompt renderizado para ComfyUI
     """
     
     if not products_metadata:
         return "A person wearing casual clothing, professional studio photo, white background"
     
-    # Describir las prendas que se aplicarán
-    items = []
-    for p in products_metadata:
-        name = p.get('name', 'clothing item')
-        category = p.get('category', 'clothing')
-        items.append(f"{name} ({category})")
+    # ============================================
+    # 1. CONSTRUIR ESTRUCTURA JSON
+    # ============================================
+    prompt_data = {
+        "subject": {
+            "base_image": "@image 1",
+            "base_clothing": "white t-shirt and blue jeans",
+            "model": build_model_description(avatar_info),
+        },
+        "garments": [],
+        "scene": {
+            "background": "pure white seamless studio",
+            "color_accent": None,
+            "pose": "standing straight, facing camera, arms relaxed at sides",
+            "lighting": "soft professional studio lighting, even illumination",
+        },
+        "technical": {
+            "quality": "4K, sharp focus, photorealistic",
+            "style": "fashion photography, commercial",
+        }
+    }
     
-    items_desc = ", ".join(items)
+    # Contexto para instrucciones
+    has_top = any(p.get('category') == 'top' for p in products_metadata)
+    has_dress = any(p.get('category') in ['dress', 'set'] for p in products_metadata)
+    has_outerwear = any(p.get('category') == 'outerwear' for p in products_metadata)
     
-    prompt = f"""Full body portrait photo of a person wearing: {items_desc}.
+    # Procesar cada producto (Avatar es @image 1, productos son @image 2-6)
+    for idx, product in enumerate(products_metadata):
+        image_index = idx + 2  # @image 2, 3, 4, 5, 6
+        garment = {
+            "image_ref": f"@image {image_index}",
+            "name": product.get('name', 'clothing item'),
+            "category": product.get('category', 'other'),
+            "instruction": build_garment_instruction(product, image_index, has_top, has_dress),
+        }
+        prompt_data["garments"].append(garment)
     
-The person has natural appearance, standing straight, facing camera directly.
-Professional studio photography, soft even lighting.
-Background: pure white seamless (#FFFFFF).
-High quality, 4K, sharp focus, photorealistic.
-Clothing fits naturally on the body with realistic folds and shadows.
-Preserve natural skin tone and facial features."""
+    # ============================================
+    # 2. PROCESAR SCENE SETTINGS
+    # ============================================
+    if settings:
+        bg = settings.get('background', {})
+        bg_color = settings.get('backgroundColor')
+        
+        # Background
+        if bg.get('type') == 'color' and bg_color:
+            prompt_data["scene"]["background"] = f"solid {bg_color} color, clean seamless"
+            prompt_data["scene"]["color_accent"] = bg_color
+        elif bg.get('type') == 'preset' and bg.get('prompt_addon'):
+            prompt_data["scene"]["background"] = bg.get('prompt_addon')
+            if bg_color and bg_color != '#FFFFFF':
+                prompt_data["scene"]["color_accent"] = bg_color
+        elif bg.get('type') == 'auto':
+            prompt_data["scene"]["background"] = determine_auto_background(products_metadata)
+        
+        # Pose
+        if settings.get('pose', {}).get('prompt_addon'):
+            prompt_data["scene"]["pose"] = settings['pose']['prompt_addon']
+        
+        # Lighting
+        if settings.get('lighting', {}).get('prompt_addon'):
+            prompt_data["scene"]["lighting"] = settings['lighting']['prompt_addon']
+    
+    # Log estructura JSON
+    print(f"📋 Prompt Structure: {json.dumps(prompt_data, indent=2, default=str)}")
+    
+    # ============================================
+    # 3. RENDERIZAR A TEXTO
+    # ============================================
+    return render_tryon_prompt(prompt_data)
+
+
+def build_model_description(avatar_info):
+    """Construir descripción del modelo desde Grok analysis"""
+    if not avatar_info:
+        return "person"
+    
+    facial = avatar_info.get('grok_facial_features', avatar_info.get('facial', {}))
+    body = avatar_info.get('grok_body_analysis', avatar_info.get('body', {}))
+    
+    traits = []
+    
+    if facial.get('gender_presentation'):
+        traits.append(facial['gender_presentation'])
+    if facial.get('ethnicity'):
+        traits.append(facial['ethnicity'])
+    if facial.get('hair_color') and facial.get('hair_type'):
+        traits.append(f"{facial['hair_color']} {facial['hair_type']} hair")
+    if body.get('body_type'):
+        traits.append(f"{body['body_type']} build")
+    if body.get('height_cm'):
+        traits.append(f"{body['height_cm']}cm")
+    
+    return ", ".join(traits) if traits else "person"
+
+
+def build_garment_instruction(product, image_index, has_top, has_dress):
+    """Construir instrucción específica para cada prenda"""
+    name = product.get('name', 'item')
+    ref = f"@image {image_index}"
+    category = product.get('category', 'other')
+    
+    instructions = {
+        'top': f"Replace white t-shirt with {name} from {ref} (base layer)",
+        'bottom': f"Replace blue jeans with {name} from {ref}",
+        'outerwear': f"Add {name} from {ref} as outer layer" + (" (over shirt)" if has_top else ""),
+        'dress': f"Replace ALL clothing with {name} from {ref} (complete outfit)",
+        'set': f"Replace ALL clothing with {name} from {ref} (complete outfit)",
+        'shoes': f"Replace footwear with {name} from {ref}",
+        'footwear': f"Replace footwear with {name} from {ref}",
+        'accessories': f"Add accessory {name} from {ref}",
+        'head': f"Add {name} from {ref} on head/face",
+        'bag': f"Add {name} from {ref} as handbag",
+        'jewelry': f"Add {name} from {ref} as jewelry",
+    }
+    
+    return instructions.get(category, f"Add {name} from {ref}")
+
+
+def determine_auto_background(products):
+    """Determinar background automático basado en outfit"""
+    categories = [p.get('category') for p in products]
+    
+    if 'outerwear' in categories:
+        return "urban city street, modern architecture, natural daylight, depth of field"
+    if 'dress' in categories or 'set' in categories:
+        return "elegant interior, soft ambient light, luxury fashion setting"
+    if 'shoes' in categories or 'footwear' in categories:
+        return "minimalist floor, soft gradient, focus on full body"
+    return "clean studio, neutral tones, professional lighting"
+
+
+def render_tryon_prompt(prompt_data):
+    """Renderizar promptData a texto para FLUX.2"""
+    subject = prompt_data["subject"]
+    garments = prompt_data["garments"]
+    scene = prompt_data["scene"]
+    technical = prompt_data["technical"]
+    
+    # Image references
+    image_refs = [
+        f"{subject['base_image']} is the base avatar ({subject['model']} wearing {subject['base_clothing']})."
+    ]
+    for g in garments:
+        image_refs.append(f"{g['image_ref']} is {g['name']} ({g['category']}).")
+    
+    # Instructions
+    instructions = [g['instruction'] for g in garments]
+    
+    # Color accent line
+    color_line = ""
+    if scene.get('color_accent') and scene['color_accent'] != '#FFFFFF':
+        color_line = f"\n- Ambient color tone: {scene['color_accent']} as predominant accent"
+    
+    prompt = f"""IMAGE REFERENCES:
+{chr(10).join(image_refs)}
+
+EDIT INSTRUCTIONS:
+{chr(10).join(instructions)}
+
+SCENE CONFIGURATION:
+- Background: {scene['background']}{color_line}
+- Model pose: {scene['pose']}
+- Lighting: {scene['lighting']}
+
+PRESERVATION REQUIREMENTS:
+- Face: Preserve EXACT facial features, expression, skin tone from {subject['base_image']}
+- Body: Maintain identical proportions and physique
+- Identity: Person must be recognizable as same individual
+
+TECHNICAL SPECIFICATIONS:
+- Quality: {technical['quality']}
+- Style: {technical['style']}
+- Composition: Full body visible, head to feet
+- Garment fit: Natural draping, realistic folds and shadows"""
     
     return prompt
 
@@ -754,22 +933,61 @@ def execute_flux_direct(job):
     download_image(avatar_url, avatar_path)
     print(f"   Guardado: {avatar_path}")
     
-    # 2. Descargar prendas
+    # 2. Descargar prendas (Avatar + hasta 5 productos)
+    MAX_PRODUCTS = 5  # Máximo 5 productos (@image 2-6)
     garments = job['input_data'].get('garment_images', [])
     garment_filenames = []
     
-    for idx, garment in enumerate(garments[:3]):  # Máximo 3 prendas
+    products_to_process = min(len(garments), MAX_PRODUCTS)
+    print(f"👗 [Job {job_id}] Procesando {products_to_process} de {len(garments)} productos")
+    
+    for idx, garment in enumerate(garments[:MAX_PRODUCTS]):
         filename = f"garment_{job_id}_{idx}.jpg"
         path = f"{COMFY_INPUT_DIR}/{filename}"
-        print(f"📥 [Job {job_id}] Descargando prenda {idx + 1}...")
+        print(f"📥 [Job {job_id}] Descargando prenda {idx + 1}/{products_to_process}...")
         download_image(garment['url'], path)
         garment_filenames.append(filename)
+        print(f"   → @image {idx + 2}: {filename}")
     
-    # 3. Construir prompt (formato ComfyUI, sin @image)
-    products_metadata = job['input_data'].get('products_metadata', [])
-    prompt = build_tryon_prompt_comfyui(products_metadata[:3])
+    # 3. Obtener settings del job (background, pose, lighting, colors)
+    settings = job['input_data'].get('settings', None)
+    if settings:
+        print(f"\n⚙️ [Job {job_id}] Settings de try-on:")
+        print(f"   Background: {settings.get('background', {}).get('type', 'N/A')} - {settings.get('background', {}).get('value', 'N/A')}")
+        print(f"   Color accent: {settings.get('backgroundColor', 'N/A')}")
+        print(f"   Pose: {settings.get('pose', {}).get('id', 'default')}")
+        print(f"   Lighting: {settings.get('lighting', {}).get('id', 'default')}")
     
-    print(f"📝 [Job {job_id}] Prompt generado ({len(prompt)} chars)")
+    # 4. Obtener info del avatar (para descripción del modelo)
+    avatar_info = None
+    try:
+        user_id = job['user_id']
+        avatar_response = supabase.table('virtual_avatars').select(
+            'grok_facial_features, grok_body_analysis'
+        ).eq('user_id', user_id).maybe_single().execute()
+        
+        if avatar_response.data:
+            avatar_info = avatar_response.data
+            print(f"\n👤 [Job {job_id}] Avatar info obtenida:")
+            facial = avatar_info.get('grok_facial_features', {})
+            body = avatar_info.get('grok_body_analysis', {})
+            print(f"   Gender: {facial.get('gender_presentation', 'N/A')}")
+            print(f"   Hair: {facial.get('hair_color', 'N/A')} {facial.get('hair_type', '')}")
+            print(f"   Body: {body.get('body_type', 'N/A')}")
+    except Exception as e:
+        print(f"⚠️ [Job {job_id}] No se pudo obtener avatar info: {e}")
+    
+    # 5. Construir prompt dinámico con toda la info
+    products_metadata = job['input_data'].get('products_metadata', [])[:MAX_PRODUCTS]
+    prompt = build_tryon_prompt_comfyui(products_metadata, settings, avatar_info)
+    
+    print(f"\n📝 [Job {job_id}] ==================== PROMPT ESTRUCTURADO ====================")
+    print(prompt)
+    print(f"📝 [Job {job_id}] ==============================================================")
+    print(f"\n📊 [Job {job_id}] Resumen de imágenes:")
+    print(f"   @image 1: Avatar base ({avatar_filename})")
+    for idx, (filename, meta) in enumerate(zip(garment_filenames, products_metadata)):
+        print(f"   @image {idx + 2}: {meta.get('name', 'producto')} ({meta.get('category', 'N/A')}) → {filename}")
     
     # Usar ComfyUI que ya está cargado por el template
     print(f"🎬 [Job {job_id}] Generando con ComfyUI (FLUX.2)...")

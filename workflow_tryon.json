@@ -48,6 +48,7 @@
         "upscale_method": "area",
         "megapixels": 1,
         "sharpen": 1,
+        "resolution_steps": 64,
         "image": ["42", 0]
       },
       "class_type": "ImageScaleToTotalPixels"
@@ -88,7 +89,9 @@
     "48": {
       "inputs": {
         "steps": 20,
-        "denoise": 0.75
+        "denoise": 0.75,
+        "width": 1024,
+        "height": 1536
       },
       "class_type": "Flux2Scheduler"
     },
