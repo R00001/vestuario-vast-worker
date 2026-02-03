@@ -1247,10 +1247,10 @@ def execute_flux_direct(job):
         },
         "48": {
             "inputs": {
-                "steps": 7,  # 25 steps = alta calidad
+                "steps": 30,  # MÁXIMA CALIDAD
                 "denoise": 0.15,  # Bajo para preservar referencias
-                "width": 576,
-                "height": 1024  # 2K HD 9:16
+                "width": 2160,
+                "height": 3840  # 4K UHD 9:16
             },
             "class_type": "Flux2Scheduler"
         },
@@ -1382,8 +1382,8 @@ def execute_flux_direct(job):
     
     update_job_progress(job_id, 20, "Procesando en GPU...")
     
-    # Esperar resultado con actualizaciones de progreso
-    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=300, total_steps=20)
+    # Esperar resultado con actualizaciones de progreso (4K + 30 steps = ~5-10 min)
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=600, total_steps=30)
     
     print(f"✅ [Job {job_id}] Imagen generada: {result_path}")
     return result_path
