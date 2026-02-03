@@ -36,14 +36,18 @@ WORKER_CONFIG = {
 }
 
 # ============================================
-# CONFIGURACIÓN DE MODELO (auto-detect bf16 > fp8)
+# CONFIGURACIÓN DE MODELO (auto-detect: NVFP4 > bf16 > fp8)
 # ============================================
 def get_optimal_unet_config():
-    """Detecta el mejor modelo disponible"""
+    """Detecta el mejor modelo disponible (prioriza NVFP4 = 6x más rápido)"""
     models_dir = "/workspace/ComfyUI/models/diffusion_models"
     
-    # bf16 = más rápido (sin cuantización)
-    if os.path.exists(f"{models_dir}/flux2_dev_bf16.safetensors"):
+    # NVFP4 = ~6x más rápido que BF16 con calidad casi idéntica
+    if os.path.exists(f"{models_dir}/flux2-dev-nvfp4-mixed.safetensors"):
+        return {"name": "flux2-dev-nvfp4-mixed.safetensors", "dtype": "nvfp4"}
+    elif os.path.exists(f"{models_dir}/flux2-dev-nvfp4.safetensors"):
+        return {"name": "flux2-dev-nvfp4.safetensors", "dtype": "nvfp4"}
+    elif os.path.exists(f"{models_dir}/flux2_dev_bf16.safetensors"):
         return {"name": "flux2_dev_bf16.safetensors", "dtype": "bf16"}
     else:
         return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
