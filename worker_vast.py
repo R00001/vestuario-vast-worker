@@ -14,6 +14,7 @@ from datetime import datetime
 from supabase import create_client, Client
 import base64
 from pathlib import Path
+from PIL import Image
 
 # ============================================
 # CONFIGURACIÓN
@@ -180,6 +181,42 @@ def download_image(url, local_path):
     except Exception as e:
         print(f"❌ Error descargando {url}: {e}")
         raise
+
+
+def concatenate_images_for_flux(image_paths, output_path, target_height=1024):
+    """
+    Concatenar imágenes horizontalmente para FLUX.2 Edit
+    El prompt usará @image 1, @image 2, etc. para referenciar cada sección
+    """
+    if not image_paths:
+        raise ValueError("No hay imágenes para concatenar")
+    
+    images = []
+    for path in image_paths:
+        img = Image.open(path).convert('RGB')
+        # Redimensionar manteniendo aspect ratio
+        ratio = target_height / img.height
+        new_width = int(img.width * ratio)
+        resized = img.resize((new_width, target_height), Image.Resampling.LANCZOS)
+        images.append(resized)
+    
+    # Calcular ancho total
+    total_width = sum(img.width for img in images)
+    
+    # Crear imagen concatenada
+    concat_img = Image.new('RGB', (total_width, target_height))
+    
+    # Pegar cada imagen
+    x_offset = 0
+    for img in images:
+        concat_img.paste(img, (x_offset, 0))
+        x_offset += img.width
+    
+    # Guardar
+    concat_img.save(output_path, 'JPEG', quality=95)
+    print(f"   📎 Concatenado: {len(image_paths)} imágenes → {total_width}x{target_height}px")
+    
+    return output_path
 
 
 def upload_to_storage(job_id, user_id, image_base64):
@@ -895,57 +932,56 @@ High definition, 4K, photorealistic, natural proportions."""
 
 def execute_flux_direct(job):
     """
-    Ejecutar workflow de ComfyUI para try-on con FLUX Kontext
-    Basado en workflow_tryon_ui.json - cada imagen por separado, encadenadas con ReferenceLatent
+    Ejecutar workflow de ComfyUI para try-on con FLUX.2
+    SOLO NODOS NATIVOS - Sin custom nodes
+    Las imágenes se concatenan horizontalmente y el prompt referencia @image 1, @image 2, etc.
     """
     
     job_id = job['id']
     
-    print(f"🎬 [Job {job_id}] Ejecutando workflow ComfyUI (FLUX Kontext)...")
+    print(f"🎬 [Job {job_id}] Ejecutando workflow ComfyUI (FLUX.2 - Nodos Nativos)...")
     
     # Directorio input de ComfyUI
     COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
     Path(COMFY_INPUT_DIR).mkdir(parents=True, exist_ok=True)
     
-    # 1. Descargar avatar al directorio input de ComfyUI
+    # 1. Descargar avatar
     avatar_url = job['input_data']['avatar_url']
-    avatar_filename = f"avatar_{job_id}.jpg"
-    avatar_path = f"{COMFY_INPUT_DIR}/{avatar_filename}"
+    avatar_path = f"{COMFY_INPUT_DIR}/avatar_{job_id}.jpg"
     
     print(f"📥 [Job {job_id}] Descargando avatar...")
     download_image(avatar_url, avatar_path)
-    print(f"   Guardado: {avatar_path}")
     
-    # 2. Descargar prendas (hasta 5 productos)
+    # 2. Descargar prendas (hasta 5)
     MAX_PRODUCTS = 5
     garments = job['input_data'].get('garment_images', [])
-    garment_filenames = []
+    garment_paths = []
     
     products_to_process = min(len(garments), MAX_PRODUCTS)
     print(f"👗 [Job {job_id}] Descargando {products_to_process} prendas...")
     
     for idx, garment in enumerate(garments[:MAX_PRODUCTS]):
-        filename = f"garment_{job_id}_{idx}.jpg"
-        path = f"{COMFY_INPUT_DIR}/{filename}"
+        path = f"{COMFY_INPUT_DIR}/garment_{job_id}_{idx}.jpg"
         download_image(garment['url'], path)
-        garment_filenames.append(filename)
-        print(f"   → image {idx + 2}: {filename}")
+        garment_paths.append(path)
+        print(f"   → @image {idx + 2}: garment_{job_id}_{idx}.jpg")
     
-    # 3. Obtener settings del job
+    # 3. CONCATENAR imágenes horizontalmente (Avatar + Prendas)
+    all_paths = [avatar_path] + garment_paths
+    concat_filename = f"concat_{job_id}.jpg"
+    concat_path = f"{COMFY_INPUT_DIR}/{concat_filename}"
+    
+    print(f"\n🖼️ [Job {job_id}] Concatenando {len(all_paths)} imágenes...")
+    concatenate_images_for_flux(all_paths, concat_path, target_height=1024)
+    
+    # 4. Obtener settings y avatar info
     settings = job['input_data'].get('settings', None)
-    if settings:
-        print(f"\n⚙️ [Job {job_id}] Settings:")
-        print(f"   Background: {settings.get('background', {}).get('type', 'N/A')}")
-        print(f"   Pose: {settings.get('pose', {}).get('id', 'default')}")
-    
-    # 4. Obtener info del avatar
     avatar_info = None
     try:
         user_id = job['user_id']
         avatar_response = supabase.table('virtual_avatars').select(
             'grok_facial_features, grok_body_analysis'
         ).eq('user_id', user_id).maybe_single().execute()
-        
         if avatar_response.data:
             avatar_info = avatar_response.data
     except Exception as e:
@@ -961,8 +997,8 @@ def execute_flux_direct(job):
     seed = int(time.time()) % 999999999
     
     # =====================================================
-    # WORKFLOW FLUX KONTEXT - Basado en workflow_tryon_ui.json
-    # Cada imagen separada → EscalaKontext → VAE → ReferenceLatent (encadenados)
+    # WORKFLOW FLUX.2 - SOLO NODOS NATIVOS
+    # Imagen concatenada → Scale → VAEEncode → Sampler → VAEDecode
     # =====================================================
     
     workflow = {
@@ -1005,37 +1041,42 @@ def execute_flux_direct(job):
             "class_type": "FluxGuidance"
         },
         
-        # === IMAGE 1: AVATAR ===
+        # === IMAGEN CONCATENADA: Load → Scale → VAEEncode ===
         "42": {
             "inputs": {
-                "image": avatar_filename,
+                "image": concat_filename,
                 "upload": "image"
             },
             "class_type": "LoadImage"
         },
-        "60": {
+        "41": {
             "inputs": {
-                "imagen": ["42", 0]
+                "upscale_method": "lanczos",
+                "megapixels": 1.5,
+                "sharpen": 0.5,
+                "resolution_steps": 64,
+                "image": ["42", 0]
             },
-            "class_type": "EscalaImagenFluxKontext"
+            "class_type": "ImageScaleToTotalPixels"
         },
         "40": {
             "inputs": {
-                "pixels": ["60", 0],
+                "pixels": ["41", 0],
                 "vae": ["10", 0]
             },
             "class_type": "VAEEncode"
         },
-        # ReferenceLatent 1: Avatar (toma conditioning de FluxGuidance)
-        "39": {
+        
+        # === GUIDER (directo del FluxGuidance) ===
+        "22": {
             "inputs": {
-                "conditioning": ["26", 0],
-                "latent": ["40", 0]
+                "model": ["12", 0],
+                "conditioning": ["26", 0]
             },
-            "class_type": "ReferenceLatent"
+            "class_type": "BasicGuider"
         },
         
-        # === SAMPLING NODES ===
+        # === SAMPLING ===
         "25": {
             "inputs": {
                 "noise_seed": seed
@@ -1051,115 +1092,60 @@ def execute_flux_direct(job):
         "48": {
             "inputs": {
                 "steps": 20,
-                "denoise": 0.50,
+                "denoise": 0.65,
                 "width": 1024,
-                "height": 1536  # 9:16 ratio
+                "height": 1536  # 9:16 ratio para output
             },
             "class_type": "Flux2Scheduler"
         },
-    }
-    
-    # === AÑADIR CADA PRENDA COMO REFERENCIA ENCADENADA ===
-    # Flujo: LoadImage → EscalaKontext → VAEEncode → ReferenceLatent
-    last_ref_node = "39"  # Avatar es la primera referencia
-    
-    for idx, garment_filename in enumerate(garment_filenames):
-        load_id = f"g{idx}_load"
-        scale_id = f"g{idx}_scale"
-        encode_id = f"g{idx}_encode"
-        ref_id = f"g{idx}_ref"
         
-        # LoadImage
-        workflow[load_id] = {
+        # === LATENT VACÍO para output 9:16 ===
+        "47": {
             "inputs": {
-                "image": garment_filename,
-                "upload": "image"
+                "width": 1024,
+                "height": 1536,
+                "batch_size": 1
             },
-            "class_type": "LoadImage"
-        }
+            "class_type": "EmptyLatentImage"
+        },
         
-        # EscalaImagenFluxKontext
-        workflow[scale_id] = {
+        # === SAMPLER ===
+        "13": {
             "inputs": {
-                "imagen": [load_id, 0]
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["48", 0],
+                "latent_image": ["47", 0]  # Latent vacío 9:16
             },
-            "class_type": "EscalaImagenFluxKontext"
-        }
+            "class_type": "SamplerCustomAdvanced"
+        },
         
-        # VAEEncode
-        workflow[encode_id] = {
+        # === VAE DECODE ===
+        "8": {
             "inputs": {
-                "pixels": [scale_id, 0],
+                "samples": ["13", 0],
                 "vae": ["10", 0]
             },
-            "class_type": "VAEEncode"
-        }
+            "class_type": "VAEDecode"
+        },
         
-        # ReferenceLatent encadenado (toma conditioning del anterior)
-        workflow[ref_id] = {
+        # === SAVE IMAGE ===
+        "9": {
             "inputs": {
-                "conditioning": [last_ref_node, 0],
-                "latent": [encode_id, 0]
+                "filename_prefix": f"tryon_{job_id}",
+                "images": ["8", 0]
             },
-            "class_type": "ReferenceLatent"
+            "class_type": "SaveImage"
         }
-        
-        last_ref_node = ref_id
-        print(f"   📎 Prenda {idx + 1}: {garment_filename} → {ref_id}")
-    
-    # === MÉTODO MULTI-REF KONTEXT (después de todas las referencias) ===
-    workflow["65"] = {
-        "inputs": {
-            "acondicionamiento": [last_ref_node, 0],
-            "method": "index"
-        },
-        "class_type": "MétodoLatenteReferenciaMultipleFluxKontext"
     }
     
-    # === GUIDER (usa el conditioning del método multi-ref) ===
-    workflow["22"] = {
-        "inputs": {
-            "model": ["12", 0],
-            "conditioning": ["65", 0]
-        },
-        "class_type": "BasicGuider"
-    }
-    
-    # === SAMPLER (usa latente del AVATAR como base img2img) ===
-    workflow["13"] = {
-        "inputs": {
-            "noise": ["25", 0],
-            "guider": ["22", 0],
-            "sampler": ["16", 0],
-            "sigmas": ["48", 0],
-            "latent_image": ["40", 0]  # ← Latente del AVATAR
-        },
-        "class_type": "SamplerCustomAdvanced"
-    }
-    
-    # === VAE DECODE ===
-    workflow["8"] = {
-        "inputs": {
-            "samples": ["13", 0],
-            "vae": ["10", 0]
-        },
-        "class_type": "VAEDecode"
-    }
-    
-    # === SAVE IMAGE ===
-    workflow["9"] = {
-        "inputs": {
-            "filename_prefix": f"tryon_{job_id}",
-            "images": ["8", 0]
-        },
-        "class_type": "SaveImage"
-    }
-    
-    print(f"\n📊 [Job {job_id}] Workflow generado:")
-    print(f"   image 1: Avatar ({avatar_filename})")
-    for idx, gf in enumerate(garment_filenames):
-        print(f"   image {idx+2}: {gf}")
-    print(f"   Referencias encadenadas: {1 + len(garment_filenames)}")
+    print(f"\n📊 [Job {job_id}] Workflow (nodos nativos):")
+    print(f"   Input: {concat_filename} (imagen concatenada)")
+    print(f"   @image 1: Avatar")
+    for idx in range(len(garment_paths)):
+        print(f"   @image {idx+2}: Prenda {idx+1}")
+    print(f"   Output: 1024x1536 (9:16)")
     
     # Enviar a ComfyUI (formato correcto según docs)
     payload = {
