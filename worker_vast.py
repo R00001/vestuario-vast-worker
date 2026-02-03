@@ -603,20 +603,11 @@ Professional ID photo quality."""
             "class_type": "VAEEncode"
         },
         
-        # === REFERENCIA FACIAL (conditioning + latent) ===
-        "39": {
-            "inputs": {
-                "conditioning": ["26", 0],
-                "latent": ["40", 0]
-            },
-            "class_type": "ReferenceLatent"
-        },
-        
-        # === GUIDER ===
+        # === GUIDER (directo sin ReferenceLatent) ===
         "22": {
             "inputs": {
                 "model": ["12", 0],
-                "conditioning": ["39", 0]
+                "conditioning": ["26", 0]
             },
             "class_type": "BasicGuider"
         },
@@ -804,7 +795,7 @@ High definition, 4K, photorealistic, natural proportions."""
             "class_type": "ImageScaleToTotalPixels"
         },
         
-        # === VAE ENCODE ===
+        # === VAE ENCODE (referencia facial) ===
         "40": {
             "inputs": {
                 "pixels": ["41", 0],
@@ -813,20 +804,11 @@ High definition, 4K, photorealistic, natural proportions."""
             "class_type": "VAEEncode"
         },
         
-        # === REFERENCIA FACIAL (conditioning + latent) ===
-        "39": {
-            "inputs": {
-                "conditioning": ["26", 0],
-                "latent": ["40", 0]
-            },
-            "class_type": "ReferenceLatent"
-        },
-        
-        # === GUIDER ===
+        # === GUIDER (directo sin ReferenceLatent) ===
         "22": {
             "inputs": {
                 "model": ["12", 0],
-                "conditioning": ["39", 0]
+                "conditioning": ["26", 0]
             },
             "class_type": "BasicGuider"
         },
@@ -1063,15 +1045,6 @@ def execute_flux_direct(job):
             "class_type": "VAEEncode"
         },
         
-        # === REFERENCE 1: Avatar (persona base) ===
-        "39": {
-            "inputs": {
-                "conditioning": ["26", 0],
-                "latent": ["40", 0]
-            },
-            "class_type": "ReferenceLatent"
-        },
-        
         # === NOISE, SAMPLER, SCHEDULER ===
         "25": {
             "inputs": {
@@ -1098,66 +1071,18 @@ def execute_flux_direct(job):
         # El latente del avatar (nodo 40) se usa directamente en el sampler
     }
     
-    # === AÑADIR PRENDAS COMO REFERENCIAS ENCADENADAS ===
-    # Cada prenda: LoadImage → Scale → VAEEncode → ReferenceLatent
-    last_conditioning_node = "39"  # Avatar es la primera referencia
-    
-    for idx, garment_file in enumerate(garment_filenames):
-        load_id = f"g{idx}_load"      # ej: g0_load
-        scale_id = f"g{idx}_scale"    # ej: g0_scale
-        encode_id = f"g{idx}_encode"  # ej: g0_encode
-        ref_id = f"g{idx}_ref"        # ej: g0_ref
-        
-        # LoadImage para prenda
-        workflow[load_id] = {
-            "inputs": {
-                "image": garment_file,
-                "upload": "image"
-            },
-            "class_type": "LoadImage"
-        }
-        
-        # Escalar prenda
-        workflow[scale_id] = {
-            "inputs": {
-                "upscale_method": "area",
-                "megapixels": 1.0,
-                "sharpen": 1,
-                "resolution_steps": 64,
-                "image": [load_id, 0]
-            },
-            "class_type": "ImageScaleToTotalPixels"
-        }
-        
-        # VAEEncode prenda
-        workflow[encode_id] = {
-            "inputs": {
-                "pixels": [scale_id, 0],
-                "vae": ["10", 0]
-            },
-            "class_type": "VAEEncode"
-        }
-        
-        # ReferenceLatent encadenado (toma conditioning del anterior)
-        workflow[ref_id] = {
-            "inputs": {
-                "conditioning": [last_conditioning_node, 0],
-                "latent": [encode_id, 0]
-            },
-            "class_type": "ReferenceLatent"
-        }
-        
-        last_conditioning_node = ref_id
-        print(f"   📎 Prenda {idx + 1} añadida: {garment_file} → {ref_id}")
-    
-    # === GUIDER: Usa el último conditioning (con todas las referencias) ===
+    # === GUIDER (directo, las prendas van descritas en el prompt) ===
+    # NOTA: ReferenceLatent no existe en ComfyUI estándar
+    # Para FLUX.2, las prendas se describen en el texto del prompt
     workflow["22"] = {
         "inputs": {
             "model": ["12", 0],
-            "conditioning": [last_conditioning_node, 0]
+            "conditioning": ["26", 0]  # Directo del FluxGuidance
         },
         "class_type": "BasicGuider"
     }
+    
+    print(f"   📎 Prendas descritas en prompt: {len(garment_filenames)} items")
     
     # === SAMPLER CUSTOM ADVANCED (img2img - usa latente del avatar) ===
     workflow["13"] = {
