@@ -103,24 +103,36 @@ def get_comfy_queue_progress(prompt_id):
 
 def wait_for_comfy_result(job_id, prompt_id, output_node_id, max_wait=180, total_steps=20):
     """
-    Esperar resultado de ComfyUI con actualizaciones de progreso
-    Envía updates cada 3 segundos basado en el progreso estimado
+    Esperar resultado de ComfyUI con actualizaciones de progreso REAL
+    Consulta /progress para obtener el step actual
     """
     waited = 0
-    last_progress = 10
+    last_progress = 20  # Empezamos en 20% (ya enviado antes de llamar)
     
     while waited < max_wait:
-        time.sleep(3)
-        waited += 3
+        time.sleep(2)  # Polling cada 2 segundos
+        waited += 2
         
-        # Calcular progreso estimado (10% inicio, 85% durante generación)
-        # Basado en tiempo: asumimos que la generación tarda ~60s para 20 steps
-        estimated_progress = min(10 + int((waited / 60) * 75), 85)
-        
-        # Solo actualizar si el progreso cambió significativamente (>5%)
-        if estimated_progress - last_progress >= 5:
-            update_job_progress(job_id, estimated_progress, f"Generando... {waited}s")
-            last_progress = estimated_progress
+        # Obtener progreso REAL de ComfyUI
+        try:
+            # El endpoint /progress da info del job activo
+            progress_resp = requests.get(f"{COMFY_URL}/progress", timeout=5)
+            if progress_resp.status_code == 200:
+                progress_data = progress_resp.json()
+                # progress_data = {"value": current_step, "max": total_steps}
+                current_step = progress_data.get('value', 0)
+                max_steps = progress_data.get('max', total_steps)
+                
+                if max_steps > 0 and current_step > 0:
+                    # Mapear steps a progreso: 20% (inicio) a 85% (fin generación)
+                    # 65% del rango para los steps
+                    real_progress = 20 + int((current_step / max_steps) * 65)
+                    
+                    if real_progress > last_progress:
+                        update_job_progress(job_id, real_progress, f"Step {current_step}/{max_steps}")
+                        last_progress = real_progress
+        except:
+            pass  # Si falla /progress, seguimos con history
         
         # Verificar si ComfyUI terminó
         try:
@@ -137,7 +149,7 @@ def wait_for_comfy_result(job_id, prompt_id, output_node_id, max_wait=180, total
                     
                     result_path = f"/workspace/ComfyUI/output/{result_subfolder}/{result_filename}" if result_subfolder else f"/workspace/ComfyUI/output/{result_filename}"
                     
-                    update_job_progress(job_id, 90, "Procesando resultado...")
+                    update_job_progress(job_id, 90, "Subiendo resultado...")
                     return result_path
                 
                 # Verificar errores
