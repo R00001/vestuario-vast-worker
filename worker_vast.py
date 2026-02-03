@@ -35,6 +35,26 @@ WORKER_CONFIG = {
     'HEARTBEAT_INTERVAL_SECONDS': 30, # Heartbeat cada 30s
 }
 
+# ============================================
+# CONFIGURACIÓN DE MODELO (optimizado para 96GB VRAM)
+# ============================================
+def get_optimal_unet_config():
+    """Detecta el mejor modelo disponible para la GPU"""
+    models_dir = "/workspace/ComfyUI/models/diffusion_models"
+    
+    # Prioridad: bf16 > fp8 (bf16 es más rápido en GPUs con mucha VRAM)
+    if os.path.exists(f"{models_dir}/flux2_dev_bf16.safetensors"):
+        print("⚡ Usando modelo bf16 (máxima velocidad para 96GB VRAM)")
+        return {"name": "flux2_dev_bf16.safetensors", "dtype": "bf16"}
+    elif os.path.exists(f"{models_dir}/flux2_dev_fp8mixed.safetensors"):
+        print("📦 Usando modelo fp8 (cuantizado)")
+        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
+    else:
+        # Fallback al modelo por defecto
+        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
+
+UNET_CONFIG = None  # Se inicializa después de verificar ComfyUI
+
 print(f"""
 ╔═══════════════════════════════════════════════╗
 ║  LOOKS - Vast.ai GPU Worker                   ║
@@ -655,8 +675,8 @@ Professional ID photo quality."""
         # === MODELOS ===
         "12": {
             "inputs": {
-                "unet_name": "flux2_dev_fp8mixed.safetensors",
-                "weight_dtype": "default"
+                "unet_name": UNET_CONFIG["name"] if UNET_CONFIG else "flux2_dev_fp8mixed.safetensors",
+                "weight_dtype": UNET_CONFIG["dtype"] if UNET_CONFIG else "default"
             },
             "class_type": "UNETLoader"
         },
@@ -856,8 +876,8 @@ High definition, 4K, photorealistic, natural proportions."""
         # === MODELOS ===
         "12": {
             "inputs": {
-                "unet_name": "flux2_dev_fp8mixed.safetensors",
-                "weight_dtype": "default"
+                "unet_name": UNET_CONFIG["name"] if UNET_CONFIG else "flux2_dev_fp8mixed.safetensors",
+                "weight_dtype": UNET_CONFIG["dtype"] if UNET_CONFIG else "default"
             },
             "class_type": "UNETLoader"
         },
@@ -1076,8 +1096,8 @@ def execute_flux_direct(job):
         # === MODELOS ===
         "12": {
             "inputs": {
-                "unet_name": "flux2_dev_fp8mixed.safetensors",
-                "weight_dtype": "default"
+                "unet_name": UNET_CONFIG["name"] if UNET_CONFIG else "flux2_dev_fp8mixed.safetensors",
+                "weight_dtype": UNET_CONFIG["dtype"] if UNET_CONFIG else "default"
             },
             "class_type": "UNETLoader"
         },
@@ -1531,6 +1551,11 @@ def main_loop():
     
     print(f"✅ ComfyUI READY en {COMFY_URL}")
     print("   Modelos cargados, listo para procesar jobs")
+    
+    # Detectar mejor modelo para esta GPU
+    global UNET_CONFIG
+    UNET_CONFIG = get_optimal_unet_config()
+    print(f"   Modelo: {UNET_CONFIG['name']} (dtype: {UNET_CONFIG['dtype']})")
     
     # Marcar instancia como ready
     mark_instance_ready()
