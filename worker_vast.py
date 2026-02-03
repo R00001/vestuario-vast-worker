@@ -1062,12 +1062,35 @@ def process_job(job):
                 'face_hd_url': public_url,
                 'face_enhanced_at': datetime.utcnow().isoformat()
             }).eq('id', user_id).execute()
+            print(f"✅ [Job {job_id}] Face HD guardada en profiles.face_hd_url")
         elif job_type == 'avatar_generation':
-            # Actualizar profiles con el avatar base
+            # Actualizar virtual_avatars con el avatar base
+            # Primero verificar si existe el registro
+            existing = supabase.table('virtual_avatars').select('id').eq('user_id', user_id).execute()
+            
+            if existing.data and len(existing.data) > 0:
+                # Actualizar registro existente
+                supabase.table('virtual_avatars').update({
+                    'base_avatar_url': public_url,
+                    'base_avatar_generated_at': datetime.utcnow().isoformat(),
+                    'base_avatar_status': 'completed',
+                    'updated_at': datetime.utcnow().isoformat()
+                }).eq('user_id', user_id).execute()
+            else:
+                # Crear nuevo registro
+                supabase.table('virtual_avatars').insert({
+                    'user_id': user_id,
+                    'base_avatar_url': public_url,
+                    'base_avatar_generated_at': datetime.utcnow().isoformat(),
+                    'base_avatar_status': 'completed'
+                }).execute()
+            
+            # También guardar en profiles como fallback
             supabase.table('profiles').update({
                 'avatar_url': public_url,
                 'avatar_generated_at': datetime.utcnow().isoformat()
             }).eq('id', user_id).execute()
+            print(f"✅ [Job {job_id}] Avatar guardado en virtual_avatars.base_avatar_url")
         else:
             # Try-on: guardar en tryon_results
             supabase.table('tryon_results').insert({
