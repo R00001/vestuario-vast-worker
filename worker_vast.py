@@ -36,9 +36,19 @@ WORKER_CONFIG = {
 }
 
 # ============================================
-# CONFIGURACIÓN DE MODELO
+# CONFIGURACIÓN DE MODELO (auto-detect bf16 > fp8)
 # ============================================
-# Usar fp8 que viene con el template (más pequeño, funciona bien)
+def get_optimal_unet_config():
+    """Detecta el mejor modelo disponible"""
+    models_dir = "/workspace/ComfyUI/models/diffusion_models"
+    
+    # bf16 = más rápido (sin cuantización)
+    if os.path.exists(f"{models_dir}/flux2_dev_bf16.safetensors"):
+        return {"name": "flux2_dev_bf16.safetensors", "dtype": "bf16"}
+    else:
+        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
+
+# Se inicializa al arrancar
 UNET_CONFIG = {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
 
 print(f"""
@@ -1537,7 +1547,11 @@ def main_loop():
     
     print(f"✅ ComfyUI READY en {COMFY_URL}")
     print("   Modelos cargados, listo para procesar jobs")
-    print(f"   Modelo: {UNET_CONFIG['name']}")
+    
+    # Detectar mejor modelo
+    global UNET_CONFIG
+    UNET_CONFIG = get_optimal_unet_config()
+    print(f"   ⚡ Modelo: {UNET_CONFIG['name']} (dtype: {UNET_CONFIG['dtype']})")
     
     # Marcar instancia como ready
     mark_instance_ready()

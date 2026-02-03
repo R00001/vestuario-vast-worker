@@ -35,6 +35,29 @@ echo "   Ejecutando flux.2-dev.sh del template..."
 echo "✅ [$(date)] Provisioning del template completado"
 
 # ============================================================
+# PASO 1.4: Descargar modelo bf16 (más rápido para GPU 96GB)
+# ============================================================
+echo ""
+echo "⚡ PASO 1.4: Descargando modelo FLUX.2 bf16 para máxima velocidad..."
+echo ""
+
+MODELS_DIR="/workspace/ComfyUI/models/diffusion_models"
+BF16_MODEL="flux2_dev_bf16.safetensors"
+
+if [ ! -f "$MODELS_DIR/$BF16_MODEL" ]; then
+  echo "   Descargando $BF16_MODEL (~24GB)..."
+  cd "$MODELS_DIR"
+  wget -q --show-progress "https://huggingface.co/black-forest-labs/FLUX.2-dev/resolve/main/$BF16_MODEL" -O "$BF16_MODEL" || {
+    echo "⚠️ No se pudo descargar bf16, usando fp8..."
+  }
+  cd /workspace
+else
+  echo "   ✓ Modelo bf16 ya existe"
+fi
+
+echo "✅ [$(date)] Modelo bf16 listo"
+
+# ============================================================
 # PASO 1.5: Instalar Custom Nodes para FLUX.2 Multi-Reference
 # ============================================================
 echo ""
