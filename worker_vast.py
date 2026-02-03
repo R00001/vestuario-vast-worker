@@ -746,6 +746,15 @@ Professional ID photo quality."""
             },
             "class_type": "LoadImage"
         },
+        # Escalar para FLUX Kontext reference
+        "60": {
+            "inputs": {
+                "megapixels": 1.0,
+                "image": ["42", 0]
+            },
+            "class_type": "FluxKontextImageScale"
+        },
+        # Escalar para latent base (img2img)
         "41": {
             "inputs": {
                 "upscale_method": "area",
@@ -757,7 +766,7 @@ Professional ID photo quality."""
             "class_type": "ImageScaleToTotalPixels"
         },
         
-        # === VAE ENCODE (img2img) ===
+        # === VAE ENCODE para img2img ===
         "40": {
             "inputs": {
                 "pixels": ["41", 0],
@@ -765,12 +774,29 @@ Professional ID photo quality."""
             },
             "class_type": "VAEEncode"
         },
+        # VAE Encode para reference
+        "61": {
+            "inputs": {
+                "pixels": ["60", 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEEncode"
+        },
         
-        # === GUIDER (directo sin ReferenceLatent) ===
+        # === REFERENCE LATENT (copia cara exactamente) ===
+        "62": {
+            "inputs": {
+                "conditioning": ["26", 0],
+                "latent": ["61", 0]
+            },
+            "class_type": "ReferenceLatent"
+        },
+        
+        # === GUIDER con ReferenceLatent ===
         "22": {
             "inputs": {
                 "model": ["12", 0],
-                "conditioning": ["26", 0]
+                "conditioning": ["62", 0]  # Usa conditioning con referencia
             },
             "class_type": "BasicGuider"
         },
@@ -790,8 +816,8 @@ Professional ID photo quality."""
         },
         "48": {
             "inputs": {
-                "steps": 20,  # Más steps para mejor calidad
-                "denoise": 0.25,  # Bajo para preservar cara original
+                "steps": 14,
+                "denoise": 0.35,  # ReferenceLatent preserva cara, podemos subir
                 "width": 1024,
                 "height": 1024
             },
@@ -803,7 +829,7 @@ Professional ID photo quality."""
                 "guider": ["22", 0],
                 "sampler": ["16", 0],
                 "sigmas": ["48", 0],
-                "latent_image": ["40", 0]
+                "latent_image": ["40", 0]  # Usa imagen original como latent base
             },
             "class_type": "SamplerCustomAdvanced"
         },
@@ -838,7 +864,7 @@ Professional ID photo quality."""
     update_job_progress(job_id, 20, "Procesando en GPU...")
     
     # Esperar resultado con actualizaciones de progreso
-    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=120, total_steps=20)
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=120, total_steps=14)
     
     print(f"✅ [Job {job_id}] Face enhancement completado: {result_path}")
     return result_path
@@ -952,31 +978,38 @@ High definition, 4K, photorealistic, natural proportions."""
             },
             "class_type": "LoadImage"
         },
-        "41": {
+        # Escalar para FLUX Kontext reference
+        "60": {
             "inputs": {
-                "upscale_method": "area",
-                "megapixels": 1.5,
-                "sharpen": 1,
-                "resolution_steps": 64,
+                "megapixels": 1.0,
                 "image": ["42", 0]
             },
-            "class_type": "ImageScaleToTotalPixels"
+            "class_type": "FluxKontextImageScale"
         },
         
-        # === VAE ENCODE (referencia facial) ===
+        # === VAE ENCODE para reference ===
         "40": {
             "inputs": {
-                "pixels": ["41", 0],
+                "pixels": ["60", 0],
                 "vae": ["10", 0]
             },
             "class_type": "VAEEncode"
         },
         
-        # === GUIDER (directo sin ReferenceLatent) ===
+        # === REFERENCE LATENT (copia cara exactamente) ===
+        "61": {
+            "inputs": {
+                "conditioning": ["26", 0],
+                "latent": ["40", 0]
+            },
+            "class_type": "ReferenceLatent"
+        },
+        
+        # === GUIDER con ReferenceLatent ===
         "22": {
             "inputs": {
                 "model": ["12", 0],
-                "conditioning": ["26", 0]
+                "conditioning": ["61", 0]  # Usa conditioning con referencia facial
             },
             "class_type": "BasicGuider"
         },
@@ -1006,8 +1039,8 @@ High definition, 4K, photorealistic, natural proportions."""
         },
         "48": {
             "inputs": {
-                "steps": 20,  # Reducido de 25 para velocidad
-                "denoise": 1.0,  # Full generation
+                "steps": 14,  # Balanceado velocidad/calidad
+                "denoise": 1.0,  # Full generation (EmptyLatent)
                 "width": 1024,
                 "height": 1536
             },
@@ -1053,8 +1086,8 @@ High definition, 4K, photorealistic, natural proportions."""
     
     update_job_progress(job_id, 20, "Generando avatar...")
     
-    # Esperar resultado con actualizaciones de progreso (25 steps, ~70s)
-    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=180, total_steps=25)
+    # Esperar resultado con actualizaciones de progreso
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=120, total_steps=14)
     
     print(f"✅ [Job {job_id}] Avatar base generado: {result_path}")
     return result_path
