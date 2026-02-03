@@ -551,13 +551,22 @@ High definition, 4K, photorealistic, natural proportions."""
             "class_type": "VAEEncode"
         },
         
-        # === REFERENCIA FACIAL ===
-        "50": {
+        # === REFERENCIA FACIAL (conditioning + latent) ===
+        "39": {
             "inputs": {
-                "method": "index",
-                "reference_latent": ["40", 0]
+                "conditioning": ["26", 0],
+                "latent": ["40", 0]
             },
             "class_type": "ReferenceLatent"
+        },
+        
+        # === GUIDER ===
+        "22": {
+            "inputs": {
+                "model": ["12", 0],
+                "conditioning": ["39", 0]
+            },
+            "class_type": "BasicGuider"
         },
         
         # === LATENT VACÍO 9:16 ===
@@ -570,17 +579,7 @@ High definition, 4K, photorealistic, natural proportions."""
             "class_type": "EmptyLatentImage"
         },
         
-        # === SAMPLER (text2img con referencia facial) ===
-        "13": {
-            "inputs": {
-                "noise": ["25", 0],
-                "guider": ["22", 0],
-                "sampler": ["16", 0],
-                "sigmas": ["48", 0],
-                "latent_image": ["47", 0]  # Latent vacío, no img2img
-            },
-            "class_type": "SamplerCustomAdvanced"
-        },
+        # === SAMPLER ===
         "25": {
             "inputs": {
                 "noise_seed": seed
@@ -596,19 +595,21 @@ High definition, 4K, photorealistic, natural proportions."""
         "48": {
             "inputs": {
                 "steps": 25,
-                "denoise": 1.0,  # Full generation desde latent vacío
+                "denoise": 1.0,
                 "width": 1024,
                 "height": 1536
             },
             "class_type": "Flux2Scheduler"
         },
-        "22": {
+        "13": {
             "inputs": {
-                "model": ["12", 0],
-                "conditioning": ["26", 0],
-                "reference_latent": ["50", 0]
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["48", 0],
+                "latent_image": ["47", 0]
             },
-            "class_type": "BasicGuider"
+            "class_type": "SamplerCustomAdvanced"
         },
         
         # === DECODE Y GUARDAR ===
