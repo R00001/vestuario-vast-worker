@@ -1247,7 +1247,7 @@ def execute_flux_direct(job):
         },
         "48": {
             "inputs": {
-                "steps": 14,  # 25 steps = alta calidad
+                "steps": 7,  # 25 steps = alta calidad
                 "denoise": 0.15,  # Bajo para preservar referencias
                 "width": 576,
                 "height": 1024  # 2K HD 9:16
