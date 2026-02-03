@@ -680,21 +680,21 @@ def execute_face_enhancement(job):
     
     face_desc = ", ".join(face_desc_parts) if face_desc_parts else ""
     
-    prompt = f"""PIXEL-PERFECT enhancement of the exact same {gender_term} from reference image.
-{f"Features: {face_desc}." if face_desc else ""}
+    prompt = f"""CLONE the exact {gender_term} from reference image with improved lighting.
 
-CRITICAL PRESERVATION (DO NOT MODIFY):
-- EXACT same face: bone structure, nose shape, eye shape, lip shape, jawline
-- EXACT same skin tone, texture, freckles, moles, scars
-- EXACT same eye color, eyebrow shape, ear shape
-- IDENTICAL person, NO modifications to facial features
+DO NOT MODIFY - COPY EXACTLY:
+- IDENTICAL face: same bone structure, nose, eyes, lips, jawline, ears
+- IDENTICAL skin: same tone, texture, freckles, moles, wrinkles
+- IDENTICAL hair: same color, style, hairline
+- This MUST be the same person, 100% recognizable
 
-Direct frontal view, eyes looking straight at camera.
-Neutral relaxed expression.
-Background: pure white seamless (#FFFFFF).
-Soft even studio lighting, no harsh shadows.
-High definition, 4K, sharp focus, natural skin texture.
-Professional ID photo quality."""
+ONLY IMPROVE:
+- Background: change to pure white seamless (#FFFFFF)
+- Lighting: soft even studio lighting, no harsh shadows
+- Resolution: enhance to 4K sharp focus
+
+Keep EXACT same facial expression and head angle.
+Professional portrait quality."""
 
     seed = int(time.time()) % 999999999
     
@@ -817,7 +817,7 @@ Professional ID photo quality."""
         "48": {
             "inputs": {
                 "steps": 14,
-                "denoise": 0.35,  # ReferenceLatent preserva cara, podemos subir
+                "denoise": 0.15,  # MÍNIMO para máxima fidelidad facial
                 "width": 1024,
                 "height": 1024
             },
