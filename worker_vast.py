@@ -14,8 +14,6 @@ from datetime import datetime
 from supabase import create_client, Client
 import base64
 from pathlib import Path
-from PIL import Image
-from io import BytesIO
 
 # ============================================
 # CONFIGURACIÓN
@@ -183,54 +181,6 @@ def download_image(url, local_path):
         print(f"❌ Error descargando {url}: {e}")
         raise
 
-
-def concatenate_images_horizontal(image_paths, output_path, target_height=1024):
-    """
-    Concatenar múltiples imágenes horizontalmente para FLUX.2 Edit
-    Cada imagen será @image 1, @image 2, etc. en el prompt
-    
-    Args:
-        image_paths: Lista de paths a imágenes locales
-        output_path: Path donde guardar la imagen concatenada
-        target_height: Altura objetivo (mantiene aspect ratio)
-    
-    Returns:
-        output_path si exitoso
-    """
-    if not image_paths:
-        raise ValueError("No hay imágenes para concatenar")
-    
-    # Cargar todas las imágenes
-    images = []
-    for path in image_paths:
-        img = Image.open(path).convert('RGB')
-        images.append(img)
-    
-    # Redimensionar todas a la misma altura manteniendo aspect ratio
-    resized_images = []
-    for img in images:
-        ratio = target_height / img.height
-        new_width = int(img.width * ratio)
-        resized = img.resize((new_width, target_height), Image.Resampling.LANCZOS)
-        resized_images.append(resized)
-    
-    # Calcular ancho total
-    total_width = sum(img.width for img in resized_images)
-    
-    # Crear imagen concatenada
-    concat_img = Image.new('RGB', (total_width, target_height))
-    
-    # Pegar cada imagen
-    x_offset = 0
-    for img in resized_images:
-        concat_img.paste(img, (x_offset, 0))
-        x_offset += img.width
-    
-    # Guardar
-    concat_img.save(output_path, 'JPEG', quality=95)
-    print(f"   📎 Imagen concatenada: {len(image_paths)} imágenes → {total_width}x{target_height}px")
-    
-    return output_path
 
 def upload_to_storage(job_id, user_id, image_base64):
     """Subir imagen a Supabase Storage"""
@@ -945,13 +895,13 @@ High definition, 4K, photorealistic, natural proportions."""
 
 def execute_flux_direct(job):
     """
-    Ejecutar workflow de ComfyUI para try-on
-    Usa el workflow JSON con imágenes de referencia
+    Ejecutar workflow de ComfyUI para try-on con FLUX Kontext
+    Basado en workflow_tryon_ui.json - cada imagen por separado, encadenadas con ReferenceLatent
     """
     
     job_id = job['id']
     
-    print(f"🎬 [Job {job_id}] Ejecutando workflow ComfyUI...")
+    print(f"🎬 [Job {job_id}] Ejecutando workflow ComfyUI (FLUX Kontext)...")
     
     # Directorio input de ComfyUI
     COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
@@ -966,42 +916,29 @@ def execute_flux_direct(job):
     download_image(avatar_url, avatar_path)
     print(f"   Guardado: {avatar_path}")
     
-    # 2. Descargar prendas (Avatar + hasta 5 productos)
-    MAX_PRODUCTS = 5  # Máximo 5 productos (@image 2-6)
+    # 2. Descargar prendas (hasta 5 productos)
+    MAX_PRODUCTS = 5
     garments = job['input_data'].get('garment_images', [])
-    garment_paths = []
+    garment_filenames = []
     
     products_to_process = min(len(garments), MAX_PRODUCTS)
-    print(f"👗 [Job {job_id}] Procesando {products_to_process} de {len(garments)} productos")
+    print(f"👗 [Job {job_id}] Descargando {products_to_process} prendas...")
     
     for idx, garment in enumerate(garments[:MAX_PRODUCTS]):
         filename = f"garment_{job_id}_{idx}.jpg"
         path = f"{COMFY_INPUT_DIR}/{filename}"
-        print(f"📥 [Job {job_id}] Descargando prenda {idx + 1}/{products_to_process}...")
         download_image(garment['url'], path)
-        garment_paths.append(path)
-        print(f"   → @image {idx + 2}: {filename}")
+        garment_filenames.append(filename)
+        print(f"   → image {idx + 2}: {filename}")
     
-    # 3. CONCATENAR todas las imágenes horizontalmente para FLUX.2 Edit
-    # Orden: Avatar (@image 1) + Prendas (@image 2, 3, 4...)
-    all_image_paths = [avatar_path] + garment_paths
-    concat_filename = f"concat_{job_id}.jpg"
-    concat_path = f"{COMFY_INPUT_DIR}/{concat_filename}"
-    
-    print(f"\n🖼️ [Job {job_id}] Concatenando {len(all_image_paths)} imágenes...")
-    concatenate_images_horizontal(all_image_paths, concat_path, target_height=1024)
-    print(f"   → Imagen combinada: {concat_filename}")
-    
-    # 4. Obtener settings del job (background, pose, lighting, colors)
+    # 3. Obtener settings del job
     settings = job['input_data'].get('settings', None)
     if settings:
-        print(f"\n⚙️ [Job {job_id}] Settings de try-on:")
-        print(f"   Background: {settings.get('background', {}).get('type', 'N/A')} - {settings.get('background', {}).get('value', 'N/A')}")
-        print(f"   Color accent: {settings.get('backgroundColor', 'N/A')}")
+        print(f"\n⚙️ [Job {job_id}] Settings:")
+        print(f"   Background: {settings.get('background', {}).get('type', 'N/A')}")
         print(f"   Pose: {settings.get('pose', {}).get('id', 'default')}")
-        print(f"   Lighting: {settings.get('lighting', {}).get('id', 'default')}")
     
-    # 5. Obtener info del avatar (para descripción del modelo)
+    # 4. Obtener info del avatar
     avatar_info = None
     try:
         user_id = job['user_id']
@@ -1011,36 +948,23 @@ def execute_flux_direct(job):
         
         if avatar_response.data:
             avatar_info = avatar_response.data
-            print(f"\n👤 [Job {job_id}] Avatar info obtenida:")
-            facial = avatar_info.get('grok_facial_features', {})
-            body = avatar_info.get('grok_body_analysis', {})
-            print(f"   Gender: {facial.get('gender_presentation', 'N/A')}")
-            print(f"   Hair: {facial.get('hair_color', 'N/A')} {facial.get('hair_type', '')}")
-            print(f"   Body: {body.get('body_type', 'N/A')}")
     except Exception as e:
         print(f"⚠️ [Job {job_id}] No se pudo obtener avatar info: {e}")
     
-    # 6. Construir prompt dinámico con toda la info
+    # 5. Construir prompt
     products_metadata = job['input_data'].get('products_metadata', [])[:MAX_PRODUCTS]
     prompt = build_tryon_prompt_comfyui(products_metadata, settings, avatar_info)
     
-    print(f"\n📝 [Job {job_id}] ==================== PROMPT ESTRUCTURADO ====================")
-    print(prompt)
-    print(f"📝 [Job {job_id}] ==============================================================")
-    print(f"\n📊 [Job {job_id}] Resumen de imágenes concatenadas:")
-    print(f"   @image 1: Avatar base")
-    for idx, meta in enumerate(products_metadata):
-        print(f"   @image {idx + 2}: {meta.get('name', 'producto')} ({meta.get('category', 'N/A')})")
-    print(f"   → Total: {len(all_image_paths)} imágenes en {concat_filename}")
+    print(f"\n📝 [Job {job_id}] PROMPT:")
+    print(prompt[:500] + "..." if len(prompt) > 500 else prompt)
     
-    # Usar ComfyUI que ya está cargado por el template
-    print(f"🎬 [Job {job_id}] Generando con ComfyUI (FLUX.2)...")
-    
-    # ComfyUI workflow para FLUX.2 Try-On
-    # Usa avatar + prendas como referencias encadenadas
     seed = int(time.time()) % 999999999
     
-    # Construir workflow dinámicamente basado en número de prendas
+    # =====================================================
+    # WORKFLOW FLUX KONTEXT - Basado en workflow_tryon_ui.json
+    # Cada imagen separada → EscalaKontext → VAE → ReferenceLatent (encadenados)
+    # =====================================================
+    
     workflow = {
         # === MODELOS ===
         "12": {
@@ -1075,40 +999,43 @@ def execute_flux_direct(job):
         },
         "26": {
             "inputs": {
-                "guidance": 4.0,
+                "guidance": 3.5,
                 "conditioning": ["6", 0]
             },
             "class_type": "FluxGuidance"
         },
         
-        # === IMAGEN CONCATENADA: LoadImage → Scale → VAEEncode ===
-        # La imagen contiene: Avatar (@image 1) + Prendas (@image 2, 3, ...)
+        # === IMAGE 1: AVATAR ===
         "42": {
             "inputs": {
-                "image": concat_filename,
+                "image": avatar_filename,
                 "upload": "image"
             },
             "class_type": "LoadImage"
         },
-        "41": {
+        "60": {
             "inputs": {
-                "upscale_method": "area",
-                "megapixels": 1.0,
-                "sharpen": 1,
-                "resolution_steps": 64,
-                "image": ["42", 0]
+                "imagen": ["42", 0]
             },
-            "class_type": "ImageScaleToTotalPixels"
+            "class_type": "EscalaImagenFluxKontext"
         },
         "40": {
             "inputs": {
-                "pixels": ["41", 0],
+                "pixels": ["60", 0],
                 "vae": ["10", 0]
             },
             "class_type": "VAEEncode"
         },
+        # ReferenceLatent 1: Avatar (toma conditioning de FluxGuidance)
+        "39": {
+            "inputs": {
+                "conditioning": ["26", 0],
+                "latent": ["40", 0]
+            },
+            "class_type": "ReferenceLatent"
+        },
         
-        # === NOISE, SAMPLER, SCHEDULER ===
+        # === SAMPLING NODES ===
         "25": {
             "inputs": {
                 "noise_seed": seed
@@ -1124,35 +1051,88 @@ def execute_flux_direct(job):
         "48": {
             "inputs": {
                 "steps": 20,
-                "denoise": 0.75,
+                "denoise": 0.50,
                 "width": 1024,
-                "height": 1536  # 9:16 ratio para try-on full body
+                "height": 1536  # 9:16 ratio
             },
             "class_type": "Flux2Scheduler"
         },
-        # NOTA: Ya no usamos EmptyFlux2LatentImage
-        # El latente del avatar (nodo 40) se usa directamente en el sampler
     }
     
-    # === GUIDER (directo, imagen concatenada incluye todas las referencias) ===
+    # === AÑADIR CADA PRENDA COMO REFERENCIA ENCADENADA ===
+    # Flujo: LoadImage → EscalaKontext → VAEEncode → ReferenceLatent
+    last_ref_node = "39"  # Avatar es la primera referencia
+    
+    for idx, garment_filename in enumerate(garment_filenames):
+        load_id = f"g{idx}_load"
+        scale_id = f"g{idx}_scale"
+        encode_id = f"g{idx}_encode"
+        ref_id = f"g{idx}_ref"
+        
+        # LoadImage
+        workflow[load_id] = {
+            "inputs": {
+                "image": garment_filename,
+                "upload": "image"
+            },
+            "class_type": "LoadImage"
+        }
+        
+        # EscalaImagenFluxKontext
+        workflow[scale_id] = {
+            "inputs": {
+                "imagen": [load_id, 0]
+            },
+            "class_type": "EscalaImagenFluxKontext"
+        }
+        
+        # VAEEncode
+        workflow[encode_id] = {
+            "inputs": {
+                "pixels": [scale_id, 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEEncode"
+        }
+        
+        # ReferenceLatent encadenado (toma conditioning del anterior)
+        workflow[ref_id] = {
+            "inputs": {
+                "conditioning": [last_ref_node, 0],
+                "latent": [encode_id, 0]
+            },
+            "class_type": "ReferenceLatent"
+        }
+        
+        last_ref_node = ref_id
+        print(f"   📎 Prenda {idx + 1}: {garment_filename} → {ref_id}")
+    
+    # === MÉTODO MULTI-REF KONTEXT (después de todas las referencias) ===
+    workflow["65"] = {
+        "inputs": {
+            "acondicionamiento": [last_ref_node, 0],
+            "method": "index"
+        },
+        "class_type": "MétodoLatenteReferenciaMultipleFluxKontext"
+    }
+    
+    # === GUIDER (usa el conditioning del método multi-ref) ===
     workflow["22"] = {
         "inputs": {
             "model": ["12", 0],
-            "conditioning": ["26", 0]  # Directo del FluxGuidance
+            "conditioning": ["65", 0]
         },
         "class_type": "BasicGuider"
     }
     
-    print(f"   📎 Imagen concatenada con {len(all_image_paths)} referencias")
-    
-    # === SAMPLER CUSTOM ADVANCED (img2img - usa latente del avatar) ===
+    # === SAMPLER (usa latente del AVATAR como base img2img) ===
     workflow["13"] = {
         "inputs": {
             "noise": ["25", 0],
             "guider": ["22", 0],
             "sampler": ["16", 0],
             "sigmas": ["48", 0],
-            "latent_image": ["40", 0]  # ← AVATAR latente (img2img, no vacío)
+            "latent_image": ["40", 0]  # ← Latente del AVATAR
         },
         "class_type": "SamplerCustomAdvanced"
     }
@@ -1174,6 +1154,12 @@ def execute_flux_direct(job):
         },
         "class_type": "SaveImage"
     }
+    
+    print(f"\n📊 [Job {job_id}] Workflow generado:")
+    print(f"   image 1: Avatar ({avatar_filename})")
+    for idx, gf in enumerate(garment_filenames):
+        print(f"   image {idx+2}: {gf}")
+    print(f"   Referencias encadenadas: {1 + len(garment_filenames)}")
     
     # Enviar a ComfyUI (formato correcto según docs)
     payload = {
