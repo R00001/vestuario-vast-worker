@@ -321,26 +321,25 @@ Professional ID photo quality."""
             "class_type": "VAEEncode"
         },
         
-        # === REFERENCIA FACIAL ===
-        "50": {
+        # === REFERENCIA FACIAL (conditioning + latent) ===
+        "39": {
             "inputs": {
-                "method": "index",
-                "reference_latent": ["40", 0]
+                "conditioning": ["26", 0],
+                "latent": ["40", 0]
             },
             "class_type": "ReferenceLatent"
         },
         
-        # === SAMPLER ===
-        "13": {
+        # === GUIDER ===
+        "22": {
             "inputs": {
-                "noise": ["25", 0],
-                "guider": ["22", 0],
-                "sampler": ["16", 0],
-                "sigmas": ["48", 0],
-                "latent_image": ["40", 0]
+                "model": ["12", 0],
+                "conditioning": ["39", 0]
             },
-            "class_type": "SamplerCustomAdvanced"
+            "class_type": "BasicGuider"
         },
+        
+        # === SAMPLER ===
         "25": {
             "inputs": {
                 "noise_seed": seed
@@ -356,19 +355,21 @@ Professional ID photo quality."""
         "48": {
             "inputs": {
                 "steps": 20,
-                "denoise": 0.55,  # Menor denoise para preservar identidad
+                "denoise": 0.55,
                 "width": 1024,
-                "height": 1024  # Cuadrado para cara
+                "height": 1024
             },
             "class_type": "Flux2Scheduler"
         },
-        "22": {
+        "13": {
             "inputs": {
-                "model": ["12", 0],
-                "conditioning": ["26", 0],
-                "reference_latent": ["50", 0]
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["48", 0],
+                "latent_image": ["40", 0]
             },
-            "class_type": "BasicGuider"
+            "class_type": "SamplerCustomAdvanced"
         },
         
         # === DECODE Y GUARDAR ===
