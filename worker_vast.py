@@ -195,6 +195,477 @@ Quality: 4K, consistent lighting, photorealistic, seamless white background."""
     
     return prompt
 
+def execute_face_enhancement(job):
+    """
+    Generar foto HD de rostro frontal con fondo blanco
+    Usa FLUX.2 para mejorar/generar cara del usuario
+    """
+    
+    job_id = job['id']
+    
+    print(f"🎭 [Job {job_id}] Ejecutando face enhancement...")
+    
+    # Directorio input de ComfyUI
+    COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
+    Path(COMFY_INPUT_DIR).mkdir(parents=True, exist_ok=True)
+    
+    # Descargar foto de cara del usuario
+    face_url = job['input_data']['face_photo_url']
+    face_filename = f"face_{job_id}.jpg"
+    face_path = f"{COMFY_INPUT_DIR}/{face_filename}"
+    
+    print(f"📥 [Job {job_id}] Descargando foto de cara...")
+    download_image(face_url, face_path)
+    
+    # Obtener datos del análisis facial si están disponibles
+    facial_analysis = job['input_data'].get('facial_analysis', {})
+    gender = job['input_data'].get('gender', 'person')
+    
+    # Construir prompt para generar HD face
+    gender_term = "man" if gender == "male" else "woman" if gender == "female" else "person"
+    
+    # Características faciales del análisis Grok
+    face_shape = facial_analysis.get('face_shape', '')
+    skin_tone = facial_analysis.get('skin_tone', {})
+    eyes = facial_analysis.get('eyes', {})
+    hair = facial_analysis.get('hair', {})
+    
+    face_desc_parts = []
+    if face_shape:
+        face_desc_parts.append(f"{face_shape} face shape")
+    if eyes.get('color'):
+        face_desc_parts.append(f"{eyes['color']} eyes")
+    if hair.get('color') and hair.get('type'):
+        face_desc_parts.append(f"{hair['color']} {hair['type']} hair")
+    
+    face_desc = ", ".join(face_desc_parts) if face_desc_parts else ""
+    
+    prompt = f"""Professional headshot portrait of the same {gender_term} from the reference image.
+{f"Features: {face_desc}." if face_desc else ""}
+
+CRITICAL: Preserve EXACT facial features, skin tone, eye shape, nose, lips, face shape from reference.
+Direct frontal view, eyes looking straight at camera.
+Neutral relaxed expression.
+Background: pure white seamless (#FFFFFF).
+Soft even studio lighting, no harsh shadows.
+High definition, 4K, sharp focus, natural skin texture.
+Professional ID photo quality."""
+
+    seed = int(time.time()) % 999999999
+    
+    # Workflow para face enhancement
+    workflow = {
+        # === MODELOS ===
+        "12": {
+            "inputs": {
+                "unet_name": "flux2_dev_fp8mixed.safetensors",
+                "weight_dtype": "default"
+            },
+            "class_type": "UNETLoader"
+        },
+        "38": {
+            "inputs": {
+                "clip_name": "mistral_3_small_flux2_bf16.safetensors",
+                "type": "flux2",
+                "device": "default"
+            },
+            "class_type": "CLIPLoader"
+        },
+        "10": {
+            "inputs": {
+                "vae_name": "flux2-vae.safetensors"
+            },
+            "class_type": "VAELoader"
+        },
+        
+        # === PROMPT ===
+        "6": {
+            "inputs": {
+                "text": prompt,
+                "clip": ["38", 0]
+            },
+            "class_type": "CLIPTextEncode"
+        },
+        "26": {
+            "inputs": {
+                "guidance": 4.0,
+                "conditioning": ["6", 0]
+            },
+            "class_type": "FluxGuidance"
+        },
+        
+        # === CARGAR IMAGEN REFERENCIA ===
+        "42": {
+            "inputs": {
+                "image": face_filename
+            },
+            "class_type": "LoadImage"
+        },
+        "41": {
+            "inputs": {
+                "upscale_method": "area",
+                "megapixels": 1.0,
+                "sharpen": 1,
+                "resolution_steps": 64,
+                "image": ["42", 0]
+            },
+            "class_type": "ImageScaleToTotalPixels"
+        },
+        
+        # === VAE ENCODE (img2img) ===
+        "40": {
+            "inputs": {
+                "pixels": ["41", 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEEncode"
+        },
+        
+        # === REFERENCIA FACIAL ===
+        "50": {
+            "inputs": {
+                "method": "index",
+                "reference_latent": ["40", 0]
+            },
+            "class_type": "ReferenceLatent"
+        },
+        
+        # === SAMPLER ===
+        "13": {
+            "inputs": {
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["48", 0],
+                "latent_image": ["40", 0]
+            },
+            "class_type": "SamplerCustomAdvanced"
+        },
+        "25": {
+            "inputs": {
+                "noise_seed": seed
+            },
+            "class_type": "RandomNoise"
+        },
+        "16": {
+            "inputs": {
+                "sampler_name": "euler"
+            },
+            "class_type": "KSamplerSelect"
+        },
+        "48": {
+            "inputs": {
+                "steps": 20,
+                "denoise": 0.55,  # Menor denoise para preservar identidad
+                "width": 1024,
+                "height": 1024  # Cuadrado para cara
+            },
+            "class_type": "Flux2Scheduler"
+        },
+        "22": {
+            "inputs": {
+                "model": ["12", 0],
+                "conditioning": ["26", 0],
+                "reference_latent": ["50", 0]
+            },
+            "class_type": "BasicGuider"
+        },
+        
+        # === DECODE Y GUARDAR ===
+        "8": {
+            "inputs": {
+                "samples": ["13", 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEDecode"
+        },
+        "9": {
+            "inputs": {
+                "filename_prefix": f"face_{job_id}",
+                "images": ["8", 0]
+            },
+            "class_type": "SaveImage"
+        }
+    }
+    
+    # Enviar a ComfyUI
+    payload = {"prompt": workflow}
+    
+    resp = requests.post(f"{COMFY_URL}/prompt", json=payload, timeout=60)
+    resp.raise_for_status()
+    
+    prompt_id = resp.json()['prompt_id']
+    print(f"📤 [Job {job_id}] ComfyUI prompt_id: {prompt_id}")
+    
+    # Esperar resultado
+    max_wait = 120  # 2 minutos para face
+    waited = 0
+    
+    while waited < max_wait:
+        time.sleep(3)
+        waited += 3
+        
+        hist_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=10)
+        history = hist_resp.json()
+        
+        if prompt_id in history:
+            outputs = history[prompt_id].get('outputs', {})
+            
+            if '9' in outputs and outputs['9'].get('images'):
+                image_info = outputs['9']['images'][0]
+                result_filename = image_info['filename']
+                result_subfolder = image_info.get('subfolder', '')
+                
+                result_path = f"/workspace/ComfyUI/output/{result_subfolder}/{result_filename}" if result_subfolder else f"/workspace/ComfyUI/output/{result_filename}"
+                
+                print(f"✅ [Job {job_id}] Face enhancement completado: {result_path}")
+                return result_path
+            
+            if history[prompt_id].get('status', {}).get('completed', False):
+                raise Exception("ComfyUI completó pero no hay output")
+    
+    raise Exception(f"Face enhancement timeout ({max_wait}s)")
+
+
+def execute_avatar_generation(job):
+    """
+    Generar avatar base 2K (cuerpo completo) del usuario
+    Combina foto de cara + análisis corporal
+    """
+    
+    job_id = job['id']
+    
+    print(f"🎭 [Job {job_id}] Generando avatar base...")
+    
+    # Directorio input de ComfyUI
+    COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
+    Path(COMFY_INPUT_DIR).mkdir(parents=True, exist_ok=True)
+    
+    # Descargar foto HD de cara (ya generada por face_enhancement)
+    face_url = job['input_data']['face_hd_url']
+    face_filename = f"face_hd_{job_id}.jpg"
+    face_path = f"{COMFY_INPUT_DIR}/{face_filename}"
+    
+    print(f"📥 [Job {job_id}] Descargando face HD...")
+    download_image(face_url, face_path)
+    
+    # Datos del usuario
+    gender = job['input_data'].get('gender', 'person')
+    body_analysis = job['input_data'].get('body_analysis', {})
+    height_cm = job['input_data'].get('height_cm', 170)
+    
+    gender_term = "man" if gender == "male" else "woman" if gender == "female" else "person"
+    
+    # Características corporales
+    body_type = body_analysis.get('body_type', {}).get('primary', 'average')
+    proportions = body_analysis.get('proportions', {})
+    
+    body_desc_parts = []
+    if body_type:
+        body_desc_parts.append(f"{body_type} build")
+    if proportions.get('shoulder_width'):
+        body_desc_parts.append(f"{proportions['shoulder_width']} shoulders")
+    
+    body_desc = ", ".join(body_desc_parts) if body_desc_parts else ""
+    
+    prompt = f"""Full body portrait of the same {gender_term} from the reference face image.
+{f"Body: {body_desc}." if body_desc else ""}
+Height approximately {height_cm}cm.
+
+Wearing plain white t-shirt and blue jeans. White sneakers.
+Standing straight, arms relaxed at sides, facing camera directly.
+CRITICAL: Face MUST match reference image exactly - same facial features, skin tone, expression.
+Background: pure white seamless (#FFFFFF).
+Professional studio photography, soft even lighting.
+Full body visible from head to feet.
+High definition, 4K, photorealistic, natural proportions."""
+
+    seed = int(time.time()) % 999999999
+    
+    # Workflow para avatar base - similar a face pero 9:16
+    workflow = {
+        # === MODELOS ===
+        "12": {
+            "inputs": {
+                "unet_name": "flux2_dev_fp8mixed.safetensors",
+                "weight_dtype": "default"
+            },
+            "class_type": "UNETLoader"
+        },
+        "38": {
+            "inputs": {
+                "clip_name": "mistral_3_small_flux2_bf16.safetensors",
+                "type": "flux2",
+                "device": "default"
+            },
+            "class_type": "CLIPLoader"
+        },
+        "10": {
+            "inputs": {
+                "vae_name": "flux2-vae.safetensors"
+            },
+            "class_type": "VAELoader"
+        },
+        
+        # === PROMPT ===
+        "6": {
+            "inputs": {
+                "text": prompt,
+                "clip": ["38", 0]
+            },
+            "class_type": "CLIPTextEncode"
+        },
+        "26": {
+            "inputs": {
+                "guidance": 4.5,
+                "conditioning": ["6", 0]
+            },
+            "class_type": "FluxGuidance"
+        },
+        
+        # === CARGAR FACE HD COMO REFERENCIA ===
+        "42": {
+            "inputs": {
+                "image": face_filename
+            },
+            "class_type": "LoadImage"
+        },
+        "41": {
+            "inputs": {
+                "upscale_method": "area",
+                "megapixels": 1.5,
+                "sharpen": 1,
+                "resolution_steps": 64,
+                "image": ["42", 0]
+            },
+            "class_type": "ImageScaleToTotalPixels"
+        },
+        
+        # === VAE ENCODE ===
+        "40": {
+            "inputs": {
+                "pixels": ["41", 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEEncode"
+        },
+        
+        # === REFERENCIA FACIAL ===
+        "50": {
+            "inputs": {
+                "method": "index",
+                "reference_latent": ["40", 0]
+            },
+            "class_type": "ReferenceLatent"
+        },
+        
+        # === LATENT VACÍO 9:16 ===
+        "47": {
+            "inputs": {
+                "width": 1024,
+                "height": 1536,
+                "batch_size": 1
+            },
+            "class_type": "EmptyLatentImage"
+        },
+        
+        # === SAMPLER (text2img con referencia facial) ===
+        "13": {
+            "inputs": {
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["48", 0],
+                "latent_image": ["47", 0]  # Latent vacío, no img2img
+            },
+            "class_type": "SamplerCustomAdvanced"
+        },
+        "25": {
+            "inputs": {
+                "noise_seed": seed
+            },
+            "class_type": "RandomNoise"
+        },
+        "16": {
+            "inputs": {
+                "sampler_name": "euler"
+            },
+            "class_type": "KSamplerSelect"
+        },
+        "48": {
+            "inputs": {
+                "steps": 25,
+                "denoise": 1.0,  # Full generation desde latent vacío
+                "width": 1024,
+                "height": 1536
+            },
+            "class_type": "Flux2Scheduler"
+        },
+        "22": {
+            "inputs": {
+                "model": ["12", 0],
+                "conditioning": ["26", 0],
+                "reference_latent": ["50", 0]
+            },
+            "class_type": "BasicGuider"
+        },
+        
+        # === DECODE Y GUARDAR ===
+        "8": {
+            "inputs": {
+                "samples": ["13", 0],
+                "vae": ["10", 0]
+            },
+            "class_type": "VAEDecode"
+        },
+        "9": {
+            "inputs": {
+                "filename_prefix": f"avatar_{job_id}",
+                "images": ["8", 0]
+            },
+            "class_type": "SaveImage"
+        }
+    }
+    
+    # Enviar a ComfyUI
+    payload = {"prompt": workflow}
+    
+    resp = requests.post(f"{COMFY_URL}/prompt", json=payload, timeout=60)
+    resp.raise_for_status()
+    
+    prompt_id = resp.json()['prompt_id']
+    print(f"📤 [Job {job_id}] ComfyUI prompt_id: {prompt_id}")
+    
+    # Esperar resultado
+    max_wait = 180  # 3 minutos para avatar completo
+    waited = 0
+    
+    while waited < max_wait:
+        time.sleep(3)
+        waited += 3
+        
+        hist_resp = requests.get(f"{COMFY_URL}/history/{prompt_id}", timeout=10)
+        history = hist_resp.json()
+        
+        if prompt_id in history:
+            outputs = history[prompt_id].get('outputs', {})
+            
+            if '9' in outputs and outputs['9'].get('images'):
+                image_info = outputs['9']['images'][0]
+                result_filename = image_info['filename']
+                result_subfolder = image_info.get('subfolder', '')
+                
+                result_path = f"/workspace/ComfyUI/output/{result_subfolder}/{result_filename}" if result_subfolder else f"/workspace/ComfyUI/output/{result_filename}"
+                
+                print(f"✅ [Job {job_id}] Avatar base generado: {result_path}")
+                return result_path
+            
+            if history[prompt_id].get('status', {}).get('completed', False):
+                raise Exception("ComfyUI completó pero no hay output")
+    
+    raise Exception(f"Avatar generation timeout ({max_wait}s)")
+
+
 def execute_flux_direct(job):
     """
     Ejecutar workflow de ComfyUI para try-on
@@ -296,6 +767,7 @@ def execute_flux_direct(job):
                 "upscale_method": "area",
                 "megapixels": 1.0,
                 "sharpen": 1,
+                "resolution_steps": 64,
                 "image": ["42", 0]
             },
             "class_type": "ImageScaleToTotalPixels"
@@ -333,7 +805,9 @@ def execute_flux_direct(job):
         "48": {
             "inputs": {
                 "steps": 20,
-                "denoise": 0.75  # Mantener estructura del avatar, cambiar ropa
+                "denoise": 0.75,
+                "width": 1024,
+                "height": 1536  # 9:16 ratio para try-on full body
             },
             "class_type": "Flux2Scheduler"
         },
@@ -366,6 +840,7 @@ def execute_flux_direct(job):
                 "upscale_method": "area",
                 "megapixels": 1.0,
                 "sharpen": 1,
+                "resolution_steps": 64,
                 "image": [load_id, 0]
             },
             "class_type": "ImageScaleToTotalPixels"
@@ -559,8 +1034,16 @@ def process_job(job):
             }
         }).eq('id', job_id).execute()
         
-        # Ejecutar FLUX.2 directo con diffusers
-        result_path = execute_flux_direct(job)
+        # Ejecutar según tipo de job
+        job_type = job.get('job_type', 'tryon')
+        
+        if job_type == 'face_enhancement':
+            result_path = execute_face_enhancement(job)
+        elif job_type == 'avatar_generation':
+            result_path = execute_avatar_generation(job)
+        else:
+            # Default: try-on
+            result_path = execute_flux_direct(job)
         
         # Actualizar progreso
         supabase.table('ai_generation_jobs').update({
@@ -570,13 +1053,27 @@ def process_job(job):
         # Subir resultado a Storage
         public_url = upload_result_to_supabase(job_id, user_id, result_path)
         
-        # Guardar en tryon_results
-        supabase.table('tryon_results').insert({
-            'user_id': user_id,
-            'job_id': job_id,
-            'result_url': public_url,
-            'products_used': job['input_data'].get('products_metadata', [])
-        }).execute()
+        # Guardar resultado según tipo de job
+        if job_type == 'face_enhancement':
+            # Actualizar profiles con la cara HD
+            supabase.table('profiles').update({
+                'face_hd_url': public_url,
+                'face_enhanced_at': datetime.utcnow().isoformat()
+            }).eq('id', user_id).execute()
+        elif job_type == 'avatar_generation':
+            # Actualizar profiles con el avatar base
+            supabase.table('profiles').update({
+                'avatar_url': public_url,
+                'avatar_generated_at': datetime.utcnow().isoformat()
+            }).eq('id', user_id).execute()
+        else:
+            # Try-on: guardar en tryon_results
+            supabase.table('tryon_results').insert({
+                'user_id': user_id,
+                'job_id': job_id,
+                'result_url': public_url,
+                'products_used': job['input_data'].get('products_metadata', [])
+            }).execute()
         
         # Marcar job como completado
         processing_time = time.time() - start_time
