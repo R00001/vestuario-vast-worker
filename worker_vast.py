@@ -225,6 +225,27 @@ def download_image(url, local_path):
         raise
 
 
+def hex_to_color_name(hex_color):
+    """Convertir hex a nombre de color para prompts"""
+    color_map = {
+        '#FFFFFF': 'white',
+        '#000000': 'black',
+        '#F5F5DC': 'beige',
+        '#FFB6C1': 'pink',
+        '#FF4444': 'red',
+        '#FF7F50': 'coral',
+        '#FFA500': 'orange',
+        '#FFD700': 'yellow gold',
+        '#4CAF50': 'green',
+        '#98FF98': 'mint green',
+        '#00BCD4': 'cyan teal',
+        '#2196F3': 'blue',
+        '#E6E6FA': 'lavender',
+        '#9C27B0': 'purple',
+    }
+    return color_map.get(hex_color.upper() if hex_color else '', 'neutral')
+
+
 def concatenate_images_for_flux(image_paths, output_path, target_height=1024):
     """
     Concatenar imágenes horizontalmente para FLUX.2 Edit
@@ -363,18 +384,45 @@ def build_tryon_prompt_comfyui(products_metadata, settings=None, avatar_info=Non
     # ============================================
     if settings:
         bg = settings.get('background', {})
-        bg_color = settings.get('backgroundColor')
+        accent_color = settings.get('accentColor')  # Nuevo: color predominante
         
-        # Background
-        if bg.get('type') == 'color' and bg_color:
-            prompt_data["scene"]["background"] = f"solid {bg_color} color, clean seamless"
-            prompt_data["scene"]["color_accent"] = bg_color
-        elif bg.get('type') == 'preset' and bg.get('prompt_addon'):
-            prompt_data["scene"]["background"] = bg.get('prompt_addon')
-            if bg_color and bg_color != '#FFFFFF':
-                prompt_data["scene"]["color_accent"] = bg_color
+        # Background - parsear prompt_addon JSON si existe
+        if bg.get('type') == 'preset' and bg.get('prompt_addon'):
+            prompt_addon = bg.get('prompt_addon')
+            
+            # Intentar parsear como JSON estructurado
+            try:
+                if prompt_addon.startswith('{'):
+                    bg_json = json.loads(prompt_addon)
+                    # Construir prompt desde JSON estructurado
+                    bg_parts = []
+                    if bg_json.get('style_description'):
+                        bg_parts.append(bg_json['style_description'])
+                    if bg_json.get('environment_and_mood'):
+                        bg_parts.append(bg_json['environment_and_mood'])
+                    if bg_json.get('lighting_and_color'):
+                        bg_parts.append(bg_json['lighting_and_color'])
+                    if bg_json.get('materials_and_textures'):
+                        bg_parts.append(bg_json['materials_and_textures'])
+                    if bg_json.get('art_direction'):
+                        bg_parts.append(bg_json['art_direction'])
+                    
+                    prompt_data["scene"]["background"] = '. '.join(bg_parts)
+                    print(f"📋 Background JSON parseado: {len(bg_parts)} campos")
+                else:
+                    # Prompt legacy (string directo)
+                    prompt_data["scene"]["background"] = prompt_addon
+            except json.JSONDecodeError:
+                # Fallback a string directo
+                prompt_data["scene"]["background"] = prompt_addon
+                
         elif bg.get('type') == 'auto':
             prompt_data["scene"]["background"] = determine_auto_background(products_metadata)
+        
+        # Accent Color - modifica la paleta de toda la escena
+        if accent_color and accent_color != '#FFFFFF':
+            color_name = hex_to_color_name(accent_color)
+            prompt_data["scene"]["color_accent"] = f"{color_name} dominant color accent, {color_name} color grading throughout scene"
         
         # Pose
         if settings.get('pose', {}).get('prompt_addon'):
@@ -496,10 +544,29 @@ def build_concat_tryon_prompt(products_metadata, settings, avatar_info, num_garm
     
     if settings:
         bg = settings.get('background', {})
-        if bg.get('prompt_addon'):
-            bg_desc = bg.get('prompt_addon')
-        if settings.get('backgroundColor') and settings.get('backgroundColor') != '#FFFFFF':
-            color_accent = f"\nAmbient color accent: {settings.get('backgroundColor')}"
+        prompt_addon = bg.get('prompt_addon', '')
+        
+        # Parsear JSON estructurado si es necesario
+        if prompt_addon:
+            try:
+                if prompt_addon.startswith('{'):
+                    bg_json = json.loads(prompt_addon)
+                    bg_parts = []
+                    for key in ['style_description', 'environment_and_mood', 'lighting_and_color', 'materials_and_textures', 'art_direction']:
+                        if bg_json.get(key):
+                            bg_parts.append(bg_json[key])
+                    bg_desc = '. '.join(bg_parts)
+                else:
+                    bg_desc = prompt_addon
+            except:
+                bg_desc = prompt_addon
+        
+        # Accent color (color predominante, no fondo sólido)
+        accent = settings.get('accentColor')
+        if accent and accent != '#FFFFFF':
+            color_name = hex_to_color_name(accent)
+            color_accent = f"\nDominant color accent: {color_name} tones throughout, {color_name} color grading"
+        
         if settings.get('pose', {}).get('prompt_addon'):
             pose_desc = settings['pose']['prompt_addon']
         if settings.get('lighting', {}).get('prompt_addon'):
