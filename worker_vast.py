@@ -923,7 +923,7 @@ Professional portrait quality."""
     update_job_progress(job_id, 20, "Procesando en GPU...")
     
     # Esperar resultado con actualizaciones de progreso
-    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=120, total_steps=14)
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=60, total_steps=8)
     
     print(f"✅ [Job {job_id}] Face enhancement completado: {result_path}")
     return result_path
@@ -1098,7 +1098,7 @@ High definition, 4K, photorealistic, natural proportions."""
         },
         "48": {
             "inputs": {
-                "steps": 14,  # Balanceado velocidad/calidad
+                "steps": 8,  # 8 steps = ~24s rápido
                 "denoise": 1.0,  # Full generation (EmptyLatent)
                 "width": 1024,
                 "height": 1536
@@ -1146,7 +1146,7 @@ High definition, 4K, photorealistic, natural proportions."""
     update_job_progress(job_id, 20, "Generando avatar...")
     
     # Esperar resultado con actualizaciones de progreso
-    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=120, total_steps=14)
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=60, total_steps=8)
     
     print(f"✅ [Job {job_id}] Avatar base generado: {result_path}")
     return result_path
@@ -1307,7 +1307,7 @@ def execute_flux_direct(job):
         },
         "48": {
             "inputs": {
-                "steps": 14,  # Balance velocidad/calidad
+                "steps": 8,  # 8 steps = ~24s rápido
                 "denoise": 0.25,
                 "width": 768,
                 "height": 1344  # HD 9:16 - rápido y estable
