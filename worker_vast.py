@@ -226,24 +226,10 @@ def download_image(url, local_path):
 
 
 def hex_to_color_name(hex_color):
-    """Convertir hex a nombre de color para prompts"""
-    color_map = {
-        '#FFFFFF': 'white',
-        '#000000': 'black',
-        '#F5F5DC': 'beige',
-        '#FFB6C1': 'pink',
-        '#FF4444': 'red',
-        '#FF7F50': 'coral',
-        '#FFA500': 'orange',
-        '#FFD700': 'yellow gold',
-        '#4CAF50': 'green',
-        '#98FF98': 'mint green',
-        '#00BCD4': 'cyan teal',
-        '#2196F3': 'blue',
-        '#E6E6FA': 'lavender',
-        '#9C27B0': 'purple',
-    }
-    return color_map.get(hex_color.upper() if hex_color else '', 'neutral')
+    """El modelo entiende hex directamente, solo sanitizamos"""
+    if not hex_color:
+        return None
+    return hex_color.upper()
 
 
 def concatenate_images_for_flux(image_paths, output_path, target_height=1024):
@@ -421,8 +407,8 @@ def build_tryon_prompt_comfyui(products_metadata, settings=None, avatar_info=Non
         
         # Accent Color - modifica la paleta de toda la escena
         if accent_color and accent_color != '#FFFFFF':
-            color_name = hex_to_color_name(accent_color)
-            prompt_data["scene"]["color_accent"] = f"{color_name} dominant color accent, {color_name} color grading throughout scene"
+            hex_color = hex_to_color_name(accent_color)
+            prompt_data["scene"]["color_accent"] = f"dominant color accent {hex_color}, color grading with {hex_color} tones throughout scene"
         
         # Pose
         if settings.get('pose', {}).get('prompt_addon'):
@@ -564,8 +550,8 @@ def build_concat_tryon_prompt(products_metadata, settings, avatar_info, num_garm
         # Accent color (color predominante, no fondo sólido)
         accent = settings.get('accentColor')
         if accent and accent != '#FFFFFF':
-            color_name = hex_to_color_name(accent)
-            color_accent = f"\nDominant color accent: {color_name} tones throughout, {color_name} color grading"
+            hex_color = hex_to_color_name(accent)
+            color_accent = f"\nDominant color accent: {hex_color} tones throughout, color grading with {hex_color}"
         
         if settings.get('pose', {}).get('prompt_addon'):
             pose_desc = settings['pose']['prompt_addon']
