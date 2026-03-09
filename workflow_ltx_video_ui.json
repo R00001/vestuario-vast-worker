@@ -16,7 +16,7 @@
         {"name": "CLIP", "type": "CLIP", "slot_index": 1, "links": [2, 3]},
         {"name": "VAE", "type": "VAE", "slot_index": 2, "links": [4, 5]}
       ],
-      "widgets_values": ["ltx-2.3-22b-distilled.safetensors"],
+      "widgets_values": ["ltx-2.3-22b-distilled-lora-384.safetensors"],
       "title": "🎬 LTX-2.3 22B Distilled"
     },
     {

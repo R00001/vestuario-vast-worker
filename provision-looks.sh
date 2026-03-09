@@ -317,6 +317,9 @@ if [ ! -d "ComfyUI-VideoHelperSuite" ]; then
   git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 2>/dev/null || echo "   no disponible"
 fi
 
+# Instalar opencv y ffmpeg ANTES de las deps de custom nodes
+pip install -q opencv-python-headless imageio-ffmpeg 2>/dev/null || true
+
 # Instalar dependencias de custom nodes
 for dir in */; do
   if [ -f "${dir}requirements.txt" ]; then
