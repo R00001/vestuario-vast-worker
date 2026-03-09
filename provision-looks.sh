@@ -31,23 +31,42 @@ if [ -z "$HF_TOKEN" ]; then
 fi
 
 # ============================================================
-# PASO 1: Ejecutar el provisioning del template
+# PASO 1: Esperar a que el template termine de descargar
+# El template vastai/comfy YA ejecuta flux.2-dev.sh automáticamente
+# NO lo re-ejecutamos — solo esperamos a que termine
 # ============================================================
 echo ""
-echo "📦 PASO 1: Ejecutando provisioning del template (FLUX.2)..."
-echo "   Esto puede tardar 15-20 minutos..."
+echo "📦 PASO 1: Esperando a que el template descargue modelos base..."
 echo ""
 
-TEMPLATE_PROVISIONING="https://github.com/vast-ai/base-image/raw/refs/heads/main/derivatives/pytorch/derivatives/comfyui/provisioning_scripts/flux.2-dev.sh"
+MODELS_DIR="/workspace/ComfyUI/models/diffusion_models"
+TEXT_ENCODERS_DIR="/workspace/ComfyUI/models/text_encoders"
+VAE_DIR="/workspace/ComfyUI/models/vae"
 
-curl -fsSL "$TEMPLATE_PROVISIONING" -o /tmp/flux2-template.sh
-chmod +x /tmp/flux2-template.sh
+# Esperar a que los modelos del template existan (máx 15 min)
+MAX_WAIT=900
+WAITED=0
+while [ $WAITED -lt $MAX_WAIT ]; do
+  # Verificar si al menos el VAE y CLIP están (los más rápidos)
+  if [ -f "$VAE_DIR/flux2-vae.safetensors" ] && [ -f "$TEXT_ENCODERS_DIR/mistral_3_small_flux2_bf16.safetensors" ]; then
+    echo "   ✓ VAE y CLIP descargados por el template"
+    # Esperar un poco más por el modelo principal (si existe ya, genial)
+    if [ -f "$MODELS_DIR/flux2_dev_fp8mixed.safetensors" ]; then
+      echo "   ✓ FLUX dev fp8 también descargado"
+    else
+      echo "   ⏳ FLUX dev fp8 aún descargando... esperando 60s más"
+      sleep 60
+    fi
+    break
+  fi
+  sleep 10
+  WAITED=$((WAITED + 10))
+  if [ $((WAITED % 60)) -eq 0 ]; then
+    echo "   ⏳ Esperando template... ($((WAITED/60)) min)"
+  fi
+done
 
-/tmp/flux2-template.sh || {
-  echo "⚠️ Provisioning del template falló, continuando..."
-}
-
-echo "✅ [$(date)] Provisioning del template completado"
+echo "✅ [$(date)] Template completado (o timeout)"
 
 # ============================================================
 # PASO 1.4: Descargar FLUX Klein 9B + LoRAs
