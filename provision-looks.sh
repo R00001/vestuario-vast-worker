@@ -417,6 +417,11 @@ SUPERVISOR_EOF
 supervisorctl reread
 supervisorctl update
 
+# Rearrancar ComfyUI (lo paramos al inicio para quitar spam)
+echo "   Rearrancando ComfyUI..."
+supervisorctl start comfyui 2>/dev/null || true
+supervisorctl start api-wrapper 2>/dev/null || true
+
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║  ✅ LOOKS Provisioning completado!                       ║"
