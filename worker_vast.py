@@ -756,37 +756,40 @@ Quality: 4K, consistent lighting, photorealistic, seamless white background."""
 
 def execute_klein_tryon(job):
     """
-    Try-On con FLUX Klein 9B + LoRA fal/flux-klein-9b-virtual-tryon-lora
+    Try-On con FLUX Klein 9B + LoRA via DIFFUSERS (no ComfyUI)
+    ComfyUI no soporta el CLIP type de Klein, así que usamos diffusers directamente.
     
     Input: avatar (person) + hasta 2 prendas (top + bottom)
-    Prompt format: TRYON [person desc]. Replace the outfit with [top] and [bottom]...
-    Output: imagen de la persona vistiendo las prendas
+    Prompt: TRYON [description]. Replace outfit with [top] and [bottom]...
+    Output: ruta local de la imagen generada
     """
+    import torch
+    from diffusers import Flux2KleinPipeline
     
     job_id = job['id']
-    print(f"👗 [Job {job_id}] Ejecutando Try-On con Klein LoRA...")
+    print(f"👗 [Job {job_id}] Ejecutando Try-On con Klein LoRA (diffusers)...")
     
     COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
+    OUTPUT_DIR = "/workspace/ComfyUI/output"
     Path(COMFY_INPUT_DIR).mkdir(parents=True, exist_ok=True)
+    Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
     
     # 1. Descargar avatar (persona)
     avatar_url = job['input_data']['avatar_url']
-    avatar_filename = f"person_{job_id}.jpg"
-    avatar_path = f"{COMFY_INPUT_DIR}/{avatar_filename}"
+    avatar_path = f"{COMFY_INPUT_DIR}/person_{job_id}.jpg"
     download_image(avatar_url, avatar_path)
     
     # 2. Descargar prendas y separar top/bottom
     garments = job['input_data'].get('garment_images', [])
     products_metadata = job['input_data'].get('products_metadata', [])
     
-    top_filename = None
-    bottom_filename = None
+    top_path = avatar_path  # fallback
+    bottom_path = avatar_path  # fallback
     top_desc = "the current top unchanged"
     bottom_desc = "the current bottom unchanged"
     
     for idx, garment in enumerate(garments[:2]):
-        filename = f"garment_{job_id}_{idx}.jpg"
-        path = f"{COMFY_INPUT_DIR}/{filename}"
+        path = f"{COMFY_INPUT_DIR}/garment_{job_id}_{idx}.jpg"
         download_image(garment['url'], path)
         
         cat = garment.get('category', '')
@@ -794,20 +797,14 @@ def execute_klein_tryon(job):
             cat = products_metadata[idx].get('category', '')
         name = products_metadata[idx].get('name', 'clothing') if idx < len(products_metadata) else 'clothing'
         
-        if cat in ('top', 'outerwear', 'dress', 'set') or (top_filename is None and cat not in ('bottom', 'shoes', 'footwear')):
-            top_filename = filename
+        if cat in ('top', 'outerwear', 'dress', 'set') or (top_path == avatar_path and cat not in ('bottom', 'shoes', 'footwear')):
+            top_path = path
             top_desc = name
         else:
-            bottom_filename = filename
+            bottom_path = path
             bottom_desc = name
     
-    # Si falta alguna prenda, usar avatar como placeholder
-    if top_filename is None:
-        top_filename = avatar_filename
-    if bottom_filename is None:
-        bottom_filename = avatar_filename
-    
-    # 3. Construir prompt TRYON
+    # 3. Construir prompt
     avatar_info = None
     try:
         user_id = job['user_id']
@@ -820,169 +817,65 @@ def execute_klein_tryon(job):
         pass
     
     person_desc = build_model_description(avatar_info) if avatar_info else "person"
-    
     prompt = f"TRYON {person_desc}, standing casually. Replace the outfit with {top_desc} and {bottom_desc} as shown in the reference images. The final image is a full body shot."
     
     print(f"📝 [Job {job_id}] Prompt: {prompt[:200]}...")
     
-    seed = int(time.time()) % 999999999
-    lora_name = UNET_CONFIG.get('tryon_lora_name', 'flux-klein-tryon-comfy.safetensors')
+    update_job_progress(job_id, 15, "Cargando Klein 9B + LoRA...")
     
-    # 4. Workflow ComfyUI: Klein base + LoRA try-on + 3 imágenes
-    workflow = {
-        # === MODELOS ===
-        "12": {
-            "inputs": {
-                "unet_name": UNET_CONFIG["name"],
-                "weight_dtype": UNET_CONFIG["dtype"]
-            },
-            "class_type": "UNETLoader"
-        },
-        # LoRA Try-On aplicado sobre Klein
-        "70": {
-            "inputs": {
-                "lora_name": lora_name,
-                "strength_model": 1.0,
-                "model": ["12", 0]
-            },
-            "class_type": "LoraLoaderModelOnly"
-        },
-        "38": {
-            "inputs": {
-                "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
-                "type": "sd3",
-                "device": "default"
-            },
-            "class_type": "CLIPLoader"
-        },
-        "10": {
-            "inputs": {"vae_name": "flux2-vae.safetensors"},
-            "class_type": "VAELoader"
-        },
+    # 4. Cargar pipeline (se cachea en memoria después de la primera vez)
+    global _klein_pipeline
+    if '_klein_pipeline' not in globals() or _klein_pipeline is None:
+        print(f"   Cargando Flux2KleinPipeline por primera vez...")
+        _klein_pipeline = Flux2KleinPipeline.from_pretrained(
+            "black-forest-labs/FLUX.2-klein-base-9B",
+            torch_dtype=torch.bfloat16,
+            token=os.getenv("HF_TOKEN"),
+        ).to("cuda")
         
-        # === PROMPT con trigger TRYON ===
-        "6": {
-            "inputs": {"text": prompt, "clip": ["38", 0]},
-            "class_type": "CLIPTextEncode"
-        },
-        "26": {
-            "inputs": {"guidance": 2.5, "conditioning": ["6", 0]},
-            "class_type": "FluxGuidance"
-        },
-        
-        # === IMAGE 1: Persona ===
-        "42": {
-            "inputs": {"image": avatar_filename},
-            "class_type": "LoadImage"
-        },
-        "60": {
-            "inputs": {"megapixels": 1.0, "image": ["42", 0]},
-            "class_type": "FluxKontextImageScale"
-        },
-        "40": {
-            "inputs": {"pixels": ["60", 0], "vae": ["10", 0]},
-            "class_type": "VAEEncode"
-        },
-        "39": {
-            "inputs": {"conditioning": ["26", 0], "latent": ["40", 0]},
-            "class_type": "ReferenceLatent"
-        },
-        
-        # === IMAGE 2: Top garment ===
-        "50": {
-            "inputs": {"image": top_filename},
-            "class_type": "LoadImage"
-        },
-        "51": {
-            "inputs": {"megapixels": 1.0, "image": ["50", 0]},
-            "class_type": "FluxKontextImageScale"
-        },
-        "52": {
-            "inputs": {"pixels": ["51", 0], "vae": ["10", 0]},
-            "class_type": "VAEEncode"
-        },
-        "53": {
-            "inputs": {"conditioning": ["39", 0], "latent": ["52", 0]},
-            "class_type": "ReferenceLatent"
-        },
-        
-        # === IMAGE 3: Bottom garment ===
-        "54": {
-            "inputs": {"image": bottom_filename},
-            "class_type": "LoadImage"
-        },
-        "55": {
-            "inputs": {"megapixels": 1.0, "image": ["54", 0]},
-            "class_type": "FluxKontextImageScale"
-        },
-        "56": {
-            "inputs": {"pixels": ["55", 0], "vae": ["10", 0]},
-            "class_type": "VAEEncode"
-        },
-        "57": {
-            "inputs": {"conditioning": ["53", 0], "latent": ["56", 0]},
-            "class_type": "ReferenceLatent"
-        },
-        
-        # === GUIDER con modelo + LoRA ===
-        "22": {
-            "inputs": {
-                "model": ["70", 0],
-                "conditioning": ["57", 0]
-            },
-            "class_type": "BasicGuider"
-        },
-        
-        # === SAMPLING ===
-        "25": {"inputs": {"noise_seed": seed}, "class_type": "RandomNoise"},
-        "16": {"inputs": {"sampler_name": "euler"}, "class_type": "KSamplerSelect"},
-        "48": {
-            "inputs": {
-                "steps": 28,      # Recomendado por la model card
-                "denoise": 0.85,
-                "width": 768,
-                "height": 1344    # 9:16 portrait
-            },
-            "class_type": "Flux2Scheduler"
-        },
-        "13": {
-            "inputs": {
-                "noise": ["25", 0],
-                "guider": ["22", 0],
-                "sampler": ["16", 0],
-                "sigmas": ["48", 0],
-                "latent_image": ["40", 0]
-            },
-            "class_type": "SamplerCustomAdvanced"
-        },
-        
-        # === DECODE Y GUARDAR ===
-        "8": {
-            "inputs": {"samples": ["13", 0], "vae": ["10", 0]},
-            "class_type": "VAEDecode"
-        },
-        "9": {
-            "inputs": {"filename_prefix": f"tryon_{job_id}", "images": ["8", 0]},
-            "class_type": "SaveImage"
-        }
-    }
-    
-    # Enviar a ComfyUI
-    update_job_progress(job_id, 15, "Enviando a GPU (Klein LoRA)...")
-    
-    payload = {"prompt": workflow, "client_id": WORKER_ID}
-    resp = requests.post(f"{COMFY_URL}/prompt", json=payload, timeout=30)
-    resp.raise_for_status()
-    
-    prompt_id = resp.json()['prompt_id']
-    print(f"📤 [Job {job_id}] Klein try-on prompt_id: {prompt_id}")
+        # Cargar LoRA try-on
+        _klein_pipeline.load_lora_weights(
+            "fal/flux-klein-9b-virtual-tryon-lora",
+            weight_name="flux-klein-tryon.safetensors",
+            adapter_name="tryon"
+        )
+        _klein_pipeline.set_adapters("tryon", adapter_weights=1.0)
+        _klein_pipeline.fuse_lora(adapter_names=["tryon"], lora_scale=1.0)
+        print(f"   ✅ Klein + LoRA cargados en VRAM")
+    else:
+        print(f"   ✅ Klein ya cargado (reutilizando)")
     
     update_job_progress(job_id, 20, "Generando look con Klein LoRA...")
     
-    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=120, total_steps=28)
+    # 5. Cargar imágenes
+    person_img = Image.open(avatar_path).convert('RGB')
+    top_img = Image.open(top_path).convert('RGB')
+    bottom_img = Image.open(bottom_path).convert('RGB')
     
+    seed = int(time.time()) % 999999999
+    
+    # 6. Generar try-on
+    result = _klein_pipeline(
+        image=[person_img, top_img, bottom_img],
+        prompt=prompt,
+        height=1024,
+        width=768,
+        num_inference_steps=28,
+        guidance_scale=2.5,
+        generator=torch.Generator("cuda").manual_seed(seed),
+    )
+    
+    output_image = result.images[0]
+    
+    # 7. Guardar resultado
+    result_path = f"{OUTPUT_DIR}/tryon_{job_id}_{int(time.time())}.jpg"
+    output_image.save(result_path, 'JPEG', quality=95)
+    
+    update_job_progress(job_id, 50, "Look generado!")
     print(f"✅ [Job {job_id}] Try-on Klein completado: {result_path}")
     return result_path
+
+_klein_pipeline = None  # Global para cachear el pipeline
 
 
 def build_lookbook_video_prompt(products_metadata):
