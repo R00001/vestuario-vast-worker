@@ -3,10 +3,11 @@
 # LOOKS - Provisioning Script para Template Vast.ai ComfyUI
 # 
 # GPU: RTX 6000 96GB — carga todos los modelos simultáneamente
+# DISCO MÍNIMO: 150GB (recomendado 200GB)
 # Modelos: FLUX Klein 9B + LoRAs (try-on/try-off) + LTX-2.3 (video)
 #
-# IMPORTANTE: Este script se usa como PROVISIONING_SCRIPT
-# y debe INCLUIR el provisioning del template + nuestro worker
+# ENV VARS REQUERIDAS en Vast:
+#   WORKER_ID, SUPABASE_URL, SUPABASE_KEY, GITHUB_REPO, HF_TOKEN
 # ============================================================
 
 set -e
@@ -15,9 +16,22 @@ echo "   Worker ID: $WORKER_ID"
 echo "   GitHub Repo: $GITHUB_REPO"
 echo "   GPU: 96GB VRAM — todos los modelos residentes"
 
+# Verificar espacio en disco
+DISK_AVAIL=$(df -BG /workspace | tail -1 | awk '{print $4}' | sed 's/G//')
+echo "   Disco disponible: ${DISK_AVAIL}GB"
+if [ "$DISK_AVAIL" -lt 120 ]; then
+  echo "⚠️ ADVERTENCIA: Menos de 120GB disponibles. Se necesitan ~120GB para todos los modelos."
+  echo "   Recomendado: 150-200GB de disco en la instancia Vast."
+fi
+
+# Verificar HF_TOKEN
+if [ -z "$HF_TOKEN" ]; then
+  echo "⚠️ ADVERTENCIA: HF_TOKEN no configurado. Klein 9B requiere autenticación en HuggingFace."
+  echo "   Configura HF_TOKEN en las env vars de Vast."
+fi
+
 # ============================================================
 # PASO 1: Ejecutar el provisioning del template
-# El template vastai/comfy descarga base models y ComfyUI
 # ============================================================
 echo ""
 echo "📦 PASO 1: Ejecutando provisioning del template (FLUX.2)..."
@@ -26,12 +40,9 @@ echo ""
 
 TEMPLATE_PROVISIONING="https://github.com/vast-ai/base-image/raw/refs/heads/main/derivatives/pytorch/derivatives/comfyui/provisioning_scripts/flux.2-dev.sh"
 
-# Descargar y ejecutar el script del template
-echo "   Descargando: $TEMPLATE_PROVISIONING"
 curl -fsSL "$TEMPLATE_PROVISIONING" -o /tmp/flux2-template.sh
 chmod +x /tmp/flux2-template.sh
 
-echo "   Ejecutando flux.2-dev.sh del template..."
 /tmp/flux2-template.sh || {
   echo "⚠️ Provisioning del template falló, continuando..."
 }
@@ -39,73 +50,82 @@ echo "   Ejecutando flux.2-dev.sh del template..."
 echo "✅ [$(date)] Provisioning del template completado"
 
 # ============================================================
-# PASO 1.4: Descargar FLUX Klein 9B (reemplaza FLUX dev)
-# Klein 9B = base para LoRAs de try-on/try-off
-# Con 96GB usamos bf16 nativo (máxima calidad)
+# PASO 1.4: Descargar FLUX Klein 9B + LoRAs
+# Klein 9B = base para LoRAs de try-on/try-off (requiere HF_TOKEN)
 # ============================================================
 echo ""
-echo "⚡ PASO 1.4: Descargando FLUX Klein 9B (base para try-on LoRAs)..."
-echo "   Klein 9B bf16 = ~18GB — cabe de sobra en 96GB VRAM"
+echo "⚡ PASO 1.4: Descargando FLUX Klein 9B + LoRAs..."
 echo ""
 
 MODELS_DIR="/workspace/ComfyUI/models/diffusion_models"
 LORAS_DIR="/workspace/ComfyUI/models/loras"
 CHECKPOINTS_DIR="/workspace/ComfyUI/models/checkpoints"
-TEXT_ENCODERS_DIR="/workspace/ComfyUI/models/text_encoders"
 
-mkdir -p "$MODELS_DIR" "$LORAS_DIR" "$CHECKPOINTS_DIR" "$TEXT_ENCODERS_DIR"
+mkdir -p "$MODELS_DIR" "$LORAS_DIR" "$CHECKPOINTS_DIR"
 
-# --- FLUX Klein 9B base model ---
+# --- FLUX Klein 9B base model (GATED — necesita HF_TOKEN) ---
 KLEIN_MODEL="flux2-klein-9b.safetensors"
 if [ ! -f "$MODELS_DIR/$KLEIN_MODEL" ]; then
-  echo "   Descargando FLUX Klein 9B base (~18GB bf16)..."
-  cd "$MODELS_DIR"
-  wget --progress=bar:force:noscroll \
-    "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/resolve/main/flux2-klein-9b.safetensors" \
-    -O "$KLEIN_MODEL" 2>&1 | tail -n 5 || {
-    echo "⚠️ Error descargando Klein 9B, probando nombre alternativo..."
+  if [ ! -z "$HF_TOKEN" ]; then
+    echo "   Descargando FLUX Klein 9B base (~18GB bf16)..."
+    cd "$MODELS_DIR"
     wget --progress=bar:force:noscroll \
-      "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B/resolve/main/flux2-klein-base-9b.safetensors" \
+      --header="Authorization: Bearer $HF_TOKEN" \
+      "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/resolve/main/flux2-klein-9b.safetensors" \
       -O "$KLEIN_MODEL" 2>&1 | tail -n 5 || {
-      echo "⚠️ Klein 9B no disponible, manteniendo FLUX dev del template"
+      echo "   Probando nombre alternativo (klein-base)..."
+      wget --progress=bar:force:noscroll \
+        --header="Authorization: Bearer $HF_TOKEN" \
+        "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B/resolve/main/flux2-klein-base-9b.safetensors" \
+        -O "$KLEIN_MODEL" 2>&1 | tail -n 5 || {
+        echo "   Usando huggingface-cli como fallback..."
+        pip install -q huggingface_hub 2>/dev/null
+        huggingface-cli download black-forest-labs/FLUX.2-klein-9B \
+          --token "$HF_TOKEN" \
+          --local-dir "$MODELS_DIR" \
+          --include "*.safetensors" 2>&1 | tail -n 5 || {
+          echo "⚠️ Klein 9B no disponible, usando FLUX dev del template como fallback"
+        }
+      }
     }
-  }
-  cd /workspace
+    cd /workspace
+    
+    # Si Klein descargó OK, eliminar flux2_dev_fp8mixed para ahorrar ~12GB de disco
+    if [ -f "$MODELS_DIR/$KLEIN_MODEL" ] && [ -s "$MODELS_DIR/$KLEIN_MODEL" ]; then
+      echo "   🗑️ Eliminando flux2_dev_fp8mixed (Klein lo reemplaza, ahorra 12GB)..."
+      rm -f "$MODELS_DIR/flux2_dev_fp8mixed.safetensors" 2>/dev/null || true
+      rm -f "$MODELS_DIR/flux2-dev-nvfp4.safetensors" 2>/dev/null || true
+      rm -f "$MODELS_DIR/flux2-dev-nvfp4-mixed.safetensors" 2>/dev/null || true
+    fi
+  else
+    echo "⚠️ HF_TOKEN no configurado — Klein 9B requiere autenticación"
+    echo "   Usando FLUX dev del template como fallback (sin LoRA try-on)"
+  fi
 else
   echo "   ✓ Klein 9B ya existe"
 fi
 
-# --- Try-On LoRA (ComfyUI version) ---
+# --- Try-On LoRA (público, no necesita token) ---
 TRYON_LORA="flux-klein-tryon-comfy.safetensors"
 if [ ! -f "$LORAS_DIR/$TRYON_LORA" ]; then
-  echo "   Descargando Try-On LoRA (~500MB)..."
+  echo "   Descargando Try-On LoRA..."
   cd "$LORAS_DIR"
   wget --progress=bar:force:noscroll \
     "https://huggingface.co/fal/flux-klein-9b-virtual-tryon-lora/resolve/main/flux-klein-tryon-comfy.safetensors" \
-    -O "$TRYON_LORA" 2>&1 | tail -n 5 || {
-    echo "⚠️ Try-On LoRA comfy no encontrado, probando versión diffusers..."
-    wget --progress=bar:force:noscroll \
-      "https://huggingface.co/fal/flux-klein-9b-virtual-tryon-lora/resolve/main/flux-klein-tryon.safetensors" \
-      -O "flux-klein-tryon.safetensors" 2>&1 | tail -n 5
-  }
+    -O "$TRYON_LORA" 2>&1 | tail -n 5 || echo "⚠️ Try-On LoRA no disponible"
   cd /workspace
 else
   echo "   ✓ Try-On LoRA ya existe"
 fi
 
-# --- Try-Off LoRA (ComfyUI version) ---
+# --- Try-Off LoRA (público) ---
 TRYOFF_LORA="virtual-tryoff-lora_comfy.safetensors"
 if [ ! -f "$LORAS_DIR/$TRYOFF_LORA" ]; then
-  echo "   Descargando Try-Off LoRA (~500MB)..."
+  echo "   Descargando Try-Off LoRA..."
   cd "$LORAS_DIR"
   wget --progress=bar:force:noscroll \
     "https://huggingface.co/fal/virtual-tryoff-lora/resolve/main/virtual-tryoff-lora_comfy.safetensors" \
-    -O "$TRYOFF_LORA" 2>&1 | tail -n 5 || {
-    echo "⚠️ Try-Off LoRA comfy no encontrado, probando diffusers..."
-    wget --progress=bar:force:noscroll \
-      "https://huggingface.co/fal/virtual-tryoff-lora/resolve/main/virtual-tryoff-lora_diffusers.safetensors" \
-      -O "virtual-tryoff-lora.safetensors" 2>&1 | tail -n 5
-  }
+    -O "$TRYOFF_LORA" 2>&1 | tail -n 5 || echo "⚠️ Try-Off LoRA no disponible"
   cd /workspace
 else
   echo "   ✓ Try-Off LoRA ya existe"
@@ -117,50 +137,62 @@ echo "✅ [$(date)] Klein 9B + LoRAs listos"
 # PASO 1.5: Descargar LTX-2.3 para video lookbook
 # ============================================================
 echo ""
-echo "🎬 PASO 1.5: Descargando LTX-2.3 para video generation..."
-echo "   LTX-2.3 bf16 = ~15-20GB — cargado permanentemente en 96GB"
+echo "🎬 PASO 1.5: Descargando LTX-2.3 22B distilled para video..."
 echo ""
 
-# LTX-2.3 22B distilled (8 steps = ~6x más rápido que dev)
-# 22B params = ~44GB bf16 — cabe en 96GB junto con Klein
-# El modelo puede venir como un solo .safetensors o como directorio
-LTX_MODEL="ltx-2.3-22b-distilled.safetensors"
-if [ ! -f "$CHECKPOINTS_DIR/$LTX_MODEL" ]; then
-  echo "   Descargando LTX-2.3 22B distilled (~44GB bf16)..."
-  echo "   Este es el modelo de video — 8 steps, máxima velocidad"
+# LTX-2.3 — puede ser gated también, intentar con y sin token
+LTX_DOWNLOADED=false
+for ltx_name in "ltx-2.3-22b-distilled.safetensors" "ltx2_3_distilled.safetensors"; do
+  if [ -f "$CHECKPOINTS_DIR/$ltx_name" ] && [ -s "$CHECKPOINTS_DIR/$ltx_name" ]; then
+    echo "   ✓ LTX-2.3 ya existe: $ltx_name"
+    LTX_DOWNLOADED=true
+    break
+  fi
+done
+
+if [ "$LTX_DOWNLOADED" = false ]; then
+  echo "   Descargando LTX-2.3 22B distilled..."
+  echo "   Esto puede tardar varios minutos (~44GB)..."
   cd "$CHECKPOINTS_DIR"
-  # Intentar descarga directa del safetensors
+  
+  # Intentar con token primero, luego sin
+  HF_AUTH_HEADER=""
+  if [ ! -z "$HF_TOKEN" ]; then
+    HF_AUTH_HEADER="--header=Authorization: Bearer $HF_TOKEN"
+  fi
+  
+  # Intentar descarga directa
   wget --progress=bar:force:noscroll \
+    $HF_AUTH_HEADER \
     "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled.safetensors" \
-    -O "$LTX_MODEL" 2>&1 | tail -n 5 || {
-    echo "   Probando nombre alternativo..."
-    wget --progress=bar:force:noscroll \
-      "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx2_3_distilled.safetensors" \
-      -O "$LTX_MODEL" 2>&1 | tail -n 5 || {
-      echo "   Probando con huggingface-cli..."
-      pip install -q huggingface_hub 2>/dev/null
-      python3 -c "
+    -O "ltx-2.3-22b-distilled.safetensors" 2>&1 | tail -n 5 || {
+    echo "   Probando con huggingface-cli..."
+    pip install -q huggingface_hub 2>/dev/null
+    python3 -c "
+import os
 from huggingface_hub import hf_hub_download, list_repo_files
-files = list_repo_files('Lightricks/LTX-2.3')
-# Buscar el archivo distilled
-distilled = [f for f in files if 'distilled' in f.lower() and f.endswith('.safetensors')]
-print(f'Archivos distilled: {distilled}')
-if distilled:
-    hf_hub_download('Lightricks/LTX-2.3', distilled[0], local_dir='$CHECKPOINTS_DIR')
-    print(f'Descargado: {distilled[0]}')
-else:
-    # Fallback: descargar lo que haya
-    all_st = [f for f in files if f.endswith('.safetensors')]
-    print(f'Todos safetensors: {all_st}')
+token = os.environ.get('HF_TOKEN')
+try:
+    files = list_repo_files('Lightricks/LTX-2.3', token=token)
+    safetensors = [f for f in files if f.endswith('.safetensors')]
+    print(f'Archivos safetensors: {safetensors}')
+    # Buscar distilled
+    distilled = [f for f in safetensors if 'distilled' in f.lower()]
+    target = distilled[0] if distilled else safetensors[0] if safetensors else None
+    if target:
+        print(f'Descargando: {target}')
+        hf_hub_download('Lightricks/LTX-2.3', target, local_dir='$CHECKPOINTS_DIR', token=token)
+        print(f'OK: {target}')
+    else:
+        print('No safetensors encontrados')
+except Exception as e:
+    print(f'Error: {e}')
 " 2>&1 || echo "⚠️ LTX-2.3 no disponible"
-    }
   }
   cd /workspace
-else
-  echo "   ✓ LTX-2.3 ya existe"
 fi
 
-echo "✅ [$(date)] LTX-2.3 + T5 text encoder listos"
+echo "✅ [$(date)] LTX-2.3 listo"
 
 # ============================================================
 # PASO 1.6: Instalar Custom Nodes
@@ -171,40 +203,40 @@ echo ""
 
 cd /workspace/ComfyUI/custom_nodes
 
-# ComfyUI-FLUX (contiene ReferenceLatent, FluxKontextImageScale, etc.)
+# ComfyUI-FLUX (ReferenceLatent, FluxKontextImageScale, etc.)
 if [ ! -d "ComfyUI-FLUX" ]; then
   echo "   Instalando ComfyUI-FLUX..."
-  git clone https://github.com/city96/ComfyUI-FLUX.git 2>/dev/null || echo "   ComfyUI-FLUX no disponible"
+  git clone https://github.com/city96/ComfyUI-FLUX.git 2>/dev/null || echo "   no disponible"
 fi
 
-# ComfyUI-KJNodes (utilidades adicionales)
+# ComfyUI-KJNodes
 if [ ! -d "ComfyUI-KJNodes" ]; then
   echo "   Instalando ComfyUI-KJNodes..."
-  git clone https://github.com/kijai/ComfyUI-KJNodes.git 2>/dev/null || echo "   ComfyUI-KJNodes no disponible"
+  git clone https://github.com/kijai/ComfyUI-KJNodes.git 2>/dev/null || echo "   no disponible"
 fi
 
-# ComfyUI-Custom-Scripts (utilidades)
+# ComfyUI-Custom-Scripts
 if [ ! -d "ComfyUI-Custom-Scripts" ]; then
   echo "   Instalando ComfyUI-Custom-Scripts..."
-  git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git 2>/dev/null || echo "   Custom-Scripts no disponible"
+  git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git 2>/dev/null || echo "   no disponible"
 fi
 
 # ComfyUI-LTXVideo (nodos para LTX-2.3 image-to-video)
 if [ ! -d "ComfyUI-LTXVideo" ]; then
   echo "   Instalando ComfyUI-LTXVideo..."
   git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git 2>/dev/null || {
-    echo "   Probando repo alternativo kijai..."
-    git clone https://github.com/kijai/ComfyUI-LTXVideo.git 2>/dev/null || echo "   ComfyUI-LTXVideo no disponible"
+    echo "   Probando repo kijai..."
+    git clone https://github.com/kijai/ComfyUI-LTXVideo.git 2>/dev/null || echo "   no disponible"
   }
 fi
 
-# ComfyUI-VideoHelperSuite (para guardar videos como mp4)
+# ComfyUI-VideoHelperSuite (guardar videos como mp4)
 if [ ! -d "ComfyUI-VideoHelperSuite" ]; then
   echo "   Instalando ComfyUI-VideoHelperSuite..."
-  git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 2>/dev/null || echo "   VideoHelperSuite no disponible"
+  git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 2>/dev/null || echo "   no disponible"
 fi
 
-# Instalar dependencias de TODOS los custom nodes
+# Instalar dependencias de custom nodes
 for dir in */; do
   if [ -f "${dir}requirements.txt" ]; then
     echo "   Instalando deps para ${dir}..."
@@ -225,10 +257,11 @@ echo "   loras:"
 ls -lh "$LORAS_DIR"/*.safetensors 2>/dev/null || echo "     (ninguno)"
 echo "   checkpoints:"
 ls -lh "$CHECKPOINTS_DIR"/*.safetensors 2>/dev/null || echo "     (ninguno)"
-echo "   text_encoders:"
-ls -lh "$TEXT_ENCODERS_DIR"/*.safetensors 2>/dev/null || echo "     (ninguno)"
 echo "   custom_nodes:"
 ls -d /workspace/ComfyUI/custom_nodes/*/ 2>/dev/null || echo "     (ninguno)"
+echo ""
+echo "   Disco usado:"
+df -h /workspace | tail -1
 echo ""
 
 # ============================================================
@@ -240,7 +273,6 @@ echo ""
 
 cd /workspace
 
-# Clonar el worker si no existe
 if [ ! -z "$GITHUB_REPO" ]; then
   if [ ! -d "worker" ]; then
     echo "   Clonando repo: $GITHUB_REPO"
@@ -251,16 +283,13 @@ if [ ! -z "$GITHUB_REPO" ]; then
   fi
   
   cd worker
-  
-  # Instalar dependencias
   if [ -f requirements.txt ]; then
     echo "   Instalando dependencias..."
     pip install -r requirements.txt
   fi
-  
   cd /workspace
 else
-  echo "⚠️ GITHUB_REPO no configurado, saltando instalación de worker"
+  echo "⚠️ GITHUB_REPO no configurado"
 fi
 
 # ============================================================
@@ -270,63 +299,53 @@ echo ""
 echo "🔥 PASO 2.5: Verificando CUDA y configurando ComfyUI --highvram..."
 echo ""
 
-# Esperar a que CUDA esté disponible
-echo "   Esperando CUDA disponible..."
+# Esperar CUDA
 MAX_WAIT=60
 WAITED=0
 while [ $WAITED -lt $MAX_WAIT ]; do
   if python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
-    echo "   ✓ CUDA disponible: $(python3 -c 'import torch; print(torch.cuda.get_device_name(0))' 2>/dev/null)"
+    echo "   ✓ CUDA: $(python3 -c 'import torch; print(torch.cuda.get_device_name(0))' 2>/dev/null)"
     echo "   ✓ VRAM: $(python3 -c 'import torch; print(f\"{torch.cuda.get_device_properties(0).total_mem/1e9:.0f}GB\")' 2>/dev/null)"
     break
   fi
   sleep 2
   WAITED=$((WAITED + 2))
-  echo "   Esperando CUDA... ($WAITED/$MAX_WAIT seg)"
 done
 
-if [ $WAITED -ge $MAX_WAIT ]; then
-  echo "   ⚠️ CUDA no disponible después de $MAX_WAIT segundos, continuando..."
-fi
-
-# Modificar el arranque de ComfyUI para usar --highvram
-# Esto mantiene TODOS los modelos cargados en 96GB VRAM simultáneamente
+# Añadir --highvram a ComfyUI (mantener todos los modelos en 96GB VRAM)
 if [ -f /etc/supervisor/conf.d/comfyui.conf ]; then
-  echo "   Añadiendo --highvram a ComfyUI supervisor config..."
+  echo "   Añadiendo --highvram a ComfyUI..."
   sed -i 's/main\.py/main.py --highvram/g' /etc/supervisor/conf.d/comfyui.conf 2>/dev/null || true
-  # Verificar que no dupliquemos el flag
   sed -i 's/--highvram --highvram/--highvram/g' /etc/supervisor/conf.d/comfyui.conf 2>/dev/null || true
 fi
 
-# Reiniciar ComfyUI con --highvram para que detecte GPU correctamente
+# Reiniciar ComfyUI
 echo "   Reiniciando ComfyUI con --highvram..."
 supervisorctl stop comfyui 2>/dev/null || true
 sleep 3
 supervisorctl start comfyui 2>/dev/null || true
 
-# Esperar a que ComfyUI esté listo
-echo "   Esperando ComfyUI con --highvram..."
+# Esperar ComfyUI
 MAX_WAIT=180
 WAITED=0
 while [ $WAITED -lt $MAX_WAIT ]; do
   if curl -s http://localhost:18188/system_stats > /dev/null 2>&1; then
-    echo "   ✓ ComfyUI listo con --highvram (96GB, modelos residentes)"
+    echo "   ✓ ComfyUI listo con --highvram"
     break
   fi
   sleep 5
   WAITED=$((WAITED + 5))
 done
 
-echo "✅ [$(date)] ComfyUI configurado con --highvram"
+echo "✅ [$(date)] ComfyUI configurado"
 
 # ============================================================
 # PASO 3: Configurar worker como servicio supervisor
 # ============================================================
 echo ""
-echo "⚙️ PASO 3: Configurando worker como servicio supervisor..."
+echo "⚙️ PASO 3: Configurando worker como servicio..."
 echo ""
 
-# Crear config de supervisor para el worker
 cat > /etc/supervisor/conf.d/looks-worker.conf << 'SUPERVISOR_EOF'
 [program:looks-worker]
 command=/bin/bash -c 'cd /workspace/worker && while [ -f /.provisioning ]; do echo "Esperando provisioning..." && sleep 5; done && while ! curl -s http://localhost:18188/system_stats > /dev/null 2>&1; do echo "Esperando ComfyUI..." && sleep 5; done && COMFYUI_API_BASE=http://localhost:18188 python3 -u worker_vast.py'
@@ -340,20 +359,15 @@ stderr_logfile=/var/log/looks-worker.err.log
 stdout_logfile=/var/log/looks-worker.out.log
 SUPERVISOR_EOF
 
-# Recargar supervisor para incluir el nuevo servicio
-echo "   Recargando supervisor..."
 supervisorctl reread
 supervisorctl update
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║  ✅ LOOKS Provisioning completado!                       ║"
-echo "║                                                          ║"
 echo "║  GPU: 96GB VRAM — --highvram activo                     ║"
-echo "║  Modelos: Klein 9B + LoRAs + LTX-2.3 (todos cargados)  ║"
-echo "║                                                          ║"
-echo "║  El worker esperará a que ComfyUI esté listo y luego    ║"
-echo "║  empezará a procesar jobs automáticamente.              ║"
+echo "║  Modelos: Klein 9B + LoRAs + LTX-2.3                    ║"
+echo "║  Disco: $(df -BG /workspace | tail -1 | awk '{print $3"/"$2}') usado                              ║"
 echo "║                                                          ║"
 echo "║  Logs:                                                   ║"
 echo "║    • Worker: tail -f /var/log/looks-worker.out.log      ║"

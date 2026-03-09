@@ -1,0 +1,367 @@
+{
+  "id": "looks-klein-tryon-v1",
+  "revision": 1,
+  "last_node_id": 80,
+  "last_link_id": 80,
+  "nodes": [
+    {
+      "id": 12,
+      "type": "UNETLoader",
+      "pos": [50, 100],
+      "size": [315, 82],
+      "order": 0,
+      "inputs": [],
+      "outputs": [{"name": "MODEL", "type": "MODEL", "slot_index": 0, "links": [1]}],
+      "widgets_values": ["flux2-klein-9b.safetensors", "default"],
+      "title": "🧠 Klein 9B Base"
+    },
+    {
+      "id": 70,
+      "type": "LoraLoaderModelOnly",
+      "pos": [50, 220],
+      "size": [315, 82],
+      "order": 1,
+      "inputs": [{"name": "model", "type": "MODEL", "link": 1}],
+      "outputs": [{"name": "MODEL", "type": "MODEL", "slot_index": 0, "links": [70]}],
+      "widgets_values": ["flux-klein-tryon-comfy.safetensors", 1.0],
+      "title": "👗 LoRA Try-On"
+    },
+    {
+      "id": 38,
+      "type": "CLIPLoader",
+      "pos": [50, 340],
+      "size": [315, 106],
+      "order": 2,
+      "inputs": [],
+      "outputs": [{"name": "CLIP", "type": "CLIP", "slot_index": 0, "links": [2]}],
+      "widgets_values": ["mistral_3_small_flux2_bf16.safetensors", "flux2", "default"],
+      "title": "📝 CLIP"
+    },
+    {
+      "id": 10,
+      "type": "VAELoader",
+      "pos": [50, 490],
+      "size": [315, 58],
+      "order": 3,
+      "inputs": [],
+      "outputs": [{"name": "VAE", "type": "VAE", "slot_index": 0, "links": [3, 4, 5, 6]}],
+      "widgets_values": ["flux2-vae.safetensors"],
+      "title": "🎨 VAE"
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "pos": [420, 100],
+      "size": [450, 180],
+      "order": 4,
+      "inputs": [{"name": "clip", "type": "CLIP", "link": 2}],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [7]}],
+      "widgets_values": ["TRYON young woman with long dark hair, standing casually. Replace the outfit with red oversized hoodie and dark blue skinny jeans as shown in the reference images. The final image is a full body shot."],
+      "title": "📝 PROMPT (trigger: TRYON)"
+    },
+    {
+      "id": 26,
+      "type": "FluxGuidance",
+      "pos": [420, 310],
+      "size": [317, 58],
+      "order": 5,
+      "inputs": [{"name": "conditioning", "type": "CONDITIONING", "link": 7}],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [8]}],
+      "widgets_values": [2.5],
+      "title": "⚡ Guidance 2.5 (Klein rec.)"
+    },
+    {
+      "id": 42,
+      "type": "LoadImage",
+      "pos": [-600, 100],
+      "size": [250, 314],
+      "order": 6,
+      "inputs": [],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [10]},
+        {"name": "MASK", "type": "MASK", "links": null}
+      ],
+      "widgets_values": ["person.jpg", "image"],
+      "title": "📷 IMAGE 1: PERSONA"
+    },
+    {
+      "id": 60,
+      "type": "FluxKontextImageScale",
+      "pos": [-600, 450],
+      "size": [250, 50],
+      "order": 7,
+      "inputs": [{"name": "image", "type": "IMAGE", "link": 10}],
+      "outputs": [{"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [11]}],
+      "widgets_values": [1.0],
+      "title": "Scale Persona"
+    },
+    {
+      "id": 40,
+      "type": "VAEEncode",
+      "pos": [-600, 540],
+      "size": [200, 46],
+      "order": 8,
+      "inputs": [
+        {"name": "pixels", "type": "IMAGE", "link": 11},
+        {"name": "vae", "type": "VAE", "link": 3}
+      ],
+      "outputs": [{"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [12, 50]}],
+      "title": "Persona → LATENT"
+    },
+    {
+      "id": 39,
+      "type": "ReferenceLatent",
+      "pos": [420, 400],
+      "size": [280, 46],
+      "order": 9,
+      "inputs": [
+        {"name": "conditioning", "type": "CONDITIONING", "link": 8},
+        {"name": "latent", "type": "LATENT", "link": 12}
+      ],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [20]}],
+      "title": "Ref 1: PERSONA (@image 1)"
+    },
+    {
+      "id": 50,
+      "type": "LoadImage",
+      "pos": [-330, 100],
+      "size": [220, 314],
+      "order": 10,
+      "inputs": [],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [30]},
+        {"name": "MASK", "type": "MASK", "links": null}
+      ],
+      "widgets_values": ["top_garment.jpg", "image"],
+      "title": "👕 IMAGE 2: TOP"
+    },
+    {
+      "id": 51,
+      "type": "FluxKontextImageScale",
+      "pos": [-330, 450],
+      "size": [220, 50],
+      "order": 11,
+      "inputs": [{"name": "image", "type": "IMAGE", "link": 30}],
+      "outputs": [{"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [31]}],
+      "widgets_values": [1.0],
+      "title": "Scale Top"
+    },
+    {
+      "id": 52,
+      "type": "VAEEncode",
+      "pos": [-330, 540],
+      "size": [200, 46],
+      "order": 12,
+      "inputs": [
+        {"name": "pixels", "type": "IMAGE", "link": 31},
+        {"name": "vae", "type": "VAE", "link": 4}
+      ],
+      "outputs": [{"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [32]}],
+      "title": "Top → LATENT"
+    },
+    {
+      "id": 53,
+      "type": "ReferenceLatent",
+      "pos": [420, 480],
+      "size": [280, 46],
+      "order": 13,
+      "inputs": [
+        {"name": "conditioning", "type": "CONDITIONING", "link": 20},
+        {"name": "latent", "type": "LATENT", "link": 32}
+      ],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [33]}],
+      "title": "Ref 2: TOP (@image 2)"
+    },
+    {
+      "id": 54,
+      "type": "LoadImage",
+      "pos": [-80, 100],
+      "size": [220, 314],
+      "order": 14,
+      "inputs": [],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [34]},
+        {"name": "MASK", "type": "MASK", "links": null}
+      ],
+      "widgets_values": ["bottom_garment.jpg", "image"],
+      "title": "👖 IMAGE 3: BOTTOM"
+    },
+    {
+      "id": 55,
+      "type": "FluxKontextImageScale",
+      "pos": [-80, 450],
+      "size": [220, 50],
+      "order": 15,
+      "inputs": [{"name": "image", "type": "IMAGE", "link": 34}],
+      "outputs": [{"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [35]}],
+      "widgets_values": [1.0],
+      "title": "Scale Bottom"
+    },
+    {
+      "id": 56,
+      "type": "VAEEncode",
+      "pos": [-80, 540],
+      "size": [200, 46],
+      "order": 16,
+      "inputs": [
+        {"name": "pixels", "type": "IMAGE", "link": 35},
+        {"name": "vae", "type": "VAE", "link": 5}
+      ],
+      "outputs": [{"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [36]}],
+      "title": "Bottom → LATENT"
+    },
+    {
+      "id": 57,
+      "type": "ReferenceLatent",
+      "pos": [420, 560],
+      "size": [280, 46],
+      "order": 17,
+      "inputs": [
+        {"name": "conditioning", "type": "CONDITIONING", "link": 33},
+        {"name": "latent", "type": "LATENT", "link": 36}
+      ],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [37]}],
+      "title": "Ref 3: BOTTOM (@image 3)"
+    },
+    {
+      "id": 22,
+      "type": "BasicGuider",
+      "pos": [800, 450],
+      "size": [222, 46],
+      "order": 18,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 70},
+        {"name": "conditioning", "type": "CONDITIONING", "link": 37}
+      ],
+      "outputs": [{"name": "GUIDER", "type": "GUIDER", "slot_index": 0, "links": [40]}],
+      "title": "Guider (Klein+LoRA)"
+    },
+    {
+      "id": 25,
+      "type": "RandomNoise",
+      "pos": [800, 100],
+      "size": [315, 82],
+      "order": 19,
+      "inputs": [],
+      "outputs": [{"name": "NOISE", "type": "NOISE", "slot_index": 0, "links": [41]}],
+      "widgets_values": [123456789, "randomize"]
+    },
+    {
+      "id": 16,
+      "type": "KSamplerSelect",
+      "pos": [800, 220],
+      "size": [315, 58],
+      "order": 20,
+      "inputs": [],
+      "outputs": [{"name": "SAMPLER", "type": "SAMPLER", "slot_index": 0, "links": [42]}],
+      "widgets_values": ["euler"]
+    },
+    {
+      "id": 48,
+      "type": "Flux2Scheduler",
+      "pos": [800, 310],
+      "size": [270, 106],
+      "order": 21,
+      "inputs": [],
+      "outputs": [{"name": "SIGMAS", "type": "SIGMAS", "slot_index": 0, "links": [43]}],
+      "widgets_values": [28, 0.85, 768, 1344],
+      "title": "⚡ 28 steps, denoise 0.85, 768x1344"
+    },
+    {
+      "id": 13,
+      "type": "SamplerCustomAdvanced",
+      "pos": [1150, 280],
+      "size": [272, 124],
+      "order": 22,
+      "inputs": [
+        {"name": "noise", "type": "NOISE", "link": 41},
+        {"name": "guider", "type": "GUIDER", "link": 40},
+        {"name": "sampler", "type": "SAMPLER", "link": 42},
+        {"name": "sigmas", "type": "SIGMAS", "link": 43},
+        {"name": "latent_image", "type": "LATENT", "link": 50}
+      ],
+      "outputs": [
+        {"name": "output", "type": "LATENT", "slot_index": 0, "links": [45]},
+        {"name": "denoised_output", "type": "LATENT", "links": null}
+      ],
+      "title": "Sampler (base=persona)"
+    },
+    {
+      "id": 8,
+      "type": "VAEDecode",
+      "pos": [1150, 450],
+      "size": [210, 46],
+      "order": 23,
+      "inputs": [
+        {"name": "samples", "type": "LATENT", "link": 45},
+        {"name": "vae", "type": "VAE", "link": 6}
+      ],
+      "outputs": [{"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [46]}]
+    },
+    {
+      "id": 9,
+      "type": "SaveImage",
+      "pos": [1150, 530],
+      "size": [400, 400],
+      "order": 24,
+      "inputs": [{"name": "images", "type": "IMAGE", "link": 46}],
+      "outputs": [],
+      "widgets_values": ["tryon_klein"],
+      "title": "💾 Output Try-On"
+    },
+    {
+      "id": 99,
+      "type": "Note",
+      "pos": [-620, -120],
+      "size": [700, 180],
+      "order": 25,
+      "inputs": [],
+      "outputs": [],
+      "widgets_values": ["🎯 LOOKS Try-On v6 - FLUX KLEIN 9B + TRYON LoRA\n\nModelo: fal/flux-klein-9b-virtual-tryon-lora\nBase: black-forest-labs/FLUX.2-klein-9B\n\n📐 FLUJO (3 imágenes):\n  Image 1 (Persona) → Scale → VAE → Ref1\n  Image 2 (Top)     → Scale → VAE → Ref2 \n  Image 3 (Bottom)  → Scale → VAE → Ref3\n  Ref1→Ref2→Ref3 → Guider (Klein+LoRA) → Sampler\n\n💬 PROMPT: \"TRYON [desc]. Replace outfit with [top] and [bottom]...\"\n⚙️ Settings: steps=28, guidance=2.5, denoise=0.85, 768x1344 (9:16)"],
+      "color": "#232",
+      "bgcolor": "#353"
+    }
+  ],
+  "links": [
+    [1, 12, 0, 70, 0, "MODEL"],
+    [2, 38, 0, 6, 0, "CLIP"],
+    [3, 10, 0, 40, 1, "VAE"],
+    [4, 10, 0, 52, 1, "VAE"],
+    [5, 10, 0, 56, 1, "VAE"],
+    [6, 10, 0, 8, 1, "VAE"],
+    [7, 6, 0, 26, 0, "CONDITIONING"],
+    [8, 26, 0, 39, 0, "CONDITIONING"],
+    [10, 42, 0, 60, 0, "IMAGE"],
+    [11, 60, 0, 40, 0, "IMAGE"],
+    [12, 40, 0, 39, 1, "LATENT"],
+    [20, 39, 0, 53, 0, "CONDITIONING"],
+    [30, 50, 0, 51, 0, "IMAGE"],
+    [31, 51, 0, 52, 0, "IMAGE"],
+    [32, 52, 0, 53, 1, "LATENT"],
+    [33, 53, 0, 57, 0, "CONDITIONING"],
+    [34, 54, 0, 55, 0, "IMAGE"],
+    [35, 55, 0, 56, 0, "IMAGE"],
+    [36, 56, 0, 57, 1, "LATENT"],
+    [37, 57, 0, 22, 1, "CONDITIONING"],
+    [40, 22, 0, 13, 1, "GUIDER"],
+    [41, 25, 0, 13, 0, "NOISE"],
+    [42, 16, 0, 13, 2, "SAMPLER"],
+    [43, 48, 0, 13, 3, "SIGMAS"],
+    [45, 13, 0, 8, 0, "LATENT"],
+    [46, 8, 0, 9, 0, "IMAGE"],
+    [50, 40, 0, 13, 4, "LATENT"],
+    [70, 70, 0, 22, 0, "MODEL"]
+  ],
+  "groups": [
+    {"title": "📷 IMAGE 1: PERSONA", "bounding": [-620, 60, 280, 550], "color": "#3f789e"},
+    {"title": "👕 IMAGE 2: TOP", "bounding": [-350, 60, 240, 550], "color": "#8A5050"},
+    {"title": "👖 IMAGE 3: BOTTOM", "bounding": [-100, 60, 240, 550], "color": "#50508A"},
+    {"title": "Models (Klein + LoRA)", "bounding": [30, 60, 340, 500], "color": "#8A8"},
+    {"title": "Prompt + References", "bounding": [400, 60, 370, 570], "color": "#88A"},
+    {"title": "Sampling", "bounding": [780, 60, 340, 400], "color": "#A88"},
+    {"title": "Output", "bounding": [1130, 240, 440, 710], "color": "#8AA"}
+  ],
+  "config": {},
+  "extra": {"ds": {"scale": 0.45, "offset": [800, 300]}},
+  "version": 0.4
+}
