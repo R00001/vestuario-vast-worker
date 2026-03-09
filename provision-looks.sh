@@ -188,7 +188,20 @@ else
   echo "   ✓ Try-Off LoRA ya existe"
 fi
 
-echo "✅ [$(date)] Klein 9B + LoRAs listos"
+# --- T5-XXL text encoder (Klein 9B usa T5, no Mistral) ---
+T5_FILE="t5xxl_fp8_e4m3fn.safetensors"
+if [ ! -f "$TEXT_ENCODERS_DIR/$T5_FILE" ]; then
+  echo "   Descargando T5-XXL fp8 text encoder (~5GB)..."
+  cd "$TEXT_ENCODERS_DIR"
+  wget --progress=bar:force:noscroll \
+    "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors" \
+    -O "$T5_FILE" 2>&1 | tail -n 5 || echo "⚠️ T5-XXL no disponible"
+  cd /workspace
+else
+  echo "   ✓ T5-XXL ya existe"
+fi
+
+echo "✅ [$(date)] Klein 9B + LoRAs + T5-XXL listos"
 
 # ============================================================
 # PASO 1.5: Descargar LTX-2.3 para video lookbook

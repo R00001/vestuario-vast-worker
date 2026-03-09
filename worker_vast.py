@@ -849,8 +849,8 @@ def execute_klein_tryon(job):
         },
         "38": {
             "inputs": {
-                "clip_name": "mistral_3_small_flux2_bf16.safetensors",
-                "type": "flux2",
+                "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
+                "type": "flux",
                 "device": "default"
             },
             "class_type": "CLIPLoader"

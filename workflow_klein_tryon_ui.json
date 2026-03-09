@@ -34,8 +34,8 @@
       "order": 2,
       "inputs": [],
       "outputs": [{"name": "CLIP", "type": "CLIP", "slot_index": 0, "links": [2]}],
-      "widgets_values": ["mistral_3_small_flux2_bf16.safetensors", "flux2", "default"],
-      "title": "📝 CLIP"
+      "widgets_values": ["t5xxl_fp8_e4m3fn.safetensors", "flux", "default"],
+      "title": "📝 CLIP (T5-XXL para Klein)"
     },
     {
       "id": 10,
