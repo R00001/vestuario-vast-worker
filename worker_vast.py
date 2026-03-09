@@ -850,7 +850,7 @@ def execute_klein_tryon(job):
         "38": {
             "inputs": {
                 "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
-                "type": "flux",
+                "type": "sd3",
                 "device": "default"
             },
             "class_type": "CLIPLoader"
