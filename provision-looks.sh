@@ -31,42 +31,38 @@ if [ -z "$HF_TOKEN" ]; then
 fi
 
 # ============================================================
-# PASO 1: Esperar a que el template termine de descargar
-# El template vastai/comfy YA ejecuta flux.2-dev.sh automáticamente
-# NO lo re-ejecutamos — solo esperamos a que termine
+# PASO 1: Ejecutar el provisioning del template
+# Descarga FLUX.2 dev (CLIP, VAE, modelo base)
+# Si ya existen los ficheros, se salta
 # ============================================================
 echo ""
-echo "📦 PASO 1: Esperando a que el template descargue modelos base..."
+echo "📦 PASO 1: Descargando modelos base del template..."
 echo ""
 
 MODELS_DIR="/workspace/ComfyUI/models/diffusion_models"
 TEXT_ENCODERS_DIR="/workspace/ComfyUI/models/text_encoders"
 VAE_DIR="/workspace/ComfyUI/models/vae"
 
-# Esperar a que los modelos del template existan (máx 15 min)
-MAX_WAIT=900
-WAITED=0
-while [ $WAITED -lt $MAX_WAIT ]; do
-  # Verificar si al menos el VAE y CLIP están (los más rápidos)
-  if [ -f "$VAE_DIR/flux2-vae.safetensors" ] && [ -f "$TEXT_ENCODERS_DIR/mistral_3_small_flux2_bf16.safetensors" ]; then
-    echo "   ✓ VAE y CLIP descargados por el template"
-    # Esperar un poco más por el modelo principal (si existe ya, genial)
-    if [ -f "$MODELS_DIR/flux2_dev_fp8mixed.safetensors" ]; then
-      echo "   ✓ FLUX dev fp8 también descargado"
-    else
-      echo "   ⏳ FLUX dev fp8 aún descargando... esperando 60s más"
-      sleep 60
-    fi
-    break
-  fi
-  sleep 10
-  WAITED=$((WAITED + 10))
-  if [ $((WAITED % 60)) -eq 0 ]; then
-    echo "   ⏳ Esperando template... ($((WAITED/60)) min)"
-  fi
-done
+# Limpiar locks huérfanos que puedan causar "Another process is downloading"
+find /workspace/ComfyUI/models -name "*.lock" -delete 2>/dev/null || true
+find /tmp -name "*.lock" -delete 2>/dev/null || true
 
-echo "✅ [$(date)] Template completado (o timeout)"
+# Solo ejecutar template si faltan modelos base
+if [ -f "$VAE_DIR/flux2-vae.safetensors" ] && \
+   [ -f "$TEXT_ENCODERS_DIR/mistral_3_small_flux2_bf16.safetensors" ]; then
+  echo "   ✓ Modelos base ya existen, saltando template"
+else
+  TEMPLATE_PROVISIONING="https://github.com/vast-ai/base-image/raw/refs/heads/main/derivatives/pytorch/derivatives/comfyui/provisioning_scripts/flux.2-dev.sh"
+  echo "   Descargando script del template..."
+  curl -fsSL "$TEMPLATE_PROVISIONING" -o /tmp/flux2-template.sh
+  chmod +x /tmp/flux2-template.sh
+  echo "   Ejecutando flux.2-dev.sh..."
+  /tmp/flux2-template.sh || {
+    echo "⚠️ Template falló, continuando..."
+  }
+fi
+
+echo "✅ [$(date)] Modelos base listos"
 
 # ============================================================
 # PASO 1.4: Descargar FLUX Klein 9B + LoRAs
