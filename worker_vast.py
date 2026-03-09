@@ -36,16 +36,16 @@ WORKER_CONFIG = {
 }
 
 # ============================================
-# CONFIGURACIÓN DE MODELO (auto-detect: NVFP4 > bf16 > fp8)
+# CONFIGURACIÓN DE MODELO
+# Prioridad: Klein 9B (try-on LoRA) > NVFP4 > fp8
 # ============================================
-# weight_dtype válidos: 'default', 'fp8_e4m3fn', 'fp8_e4m3fn_fast', 'fp8_e5m2'
-# Para bf16/nvfp4 usar 'default' - ComfyUI detecta automáticamente
 
 def get_optimal_unet_config():
-    """Detecta el mejor modelo disponible (prioriza NVFP4 puro = máxima velocidad)"""
+    """Detecta el mejor modelo disponible (prioriza Klein 9B para try-on LoRA)"""
     models_dir = "/workspace/ComfyUI/models/diffusion_models"
+    loras_dir = "/workspace/ComfyUI/models/loras"
+    checkpoints_dir = "/workspace/ComfyUI/models/checkpoints"
     
-    # Listar modelos disponibles
     print(f"\n🔍 Buscando modelos en: {models_dir}")
     if os.path.exists(models_dir):
         models = [f for f in os.listdir(models_dir) if f.endswith('.safetensors')]
@@ -54,22 +54,64 @@ def get_optimal_unet_config():
         print(f"   ⚠️ Directorio no existe!")
         models = []
     
-    # Prioridad: NVFP4 puro > NVFP4 mixed > fp8
-    if os.path.exists(f"{models_dir}/flux2-dev-nvfp4.safetensors"):
-        print("   ⚡ Seleccionado: NVFP4 puro (máxima velocidad)")
-        return {"name": "flux2-dev-nvfp4.safetensors", "dtype": "default"}
+    if os.path.exists(loras_dir):
+        loras = [f for f in os.listdir(loras_dir) if f.endswith('.safetensors')]
+        print(f"   LoRAs encontrados: {loras}")
+    else:
+        loras = []
+    
+    # Detectar LTX-2.3 para video
+    has_ltx = False
+    ltx_model = None
+    if os.path.exists(checkpoints_dir):
+        for f in os.listdir(checkpoints_dir):
+            if 'ltx' in f.lower() and f.endswith('.safetensors'):
+                has_ltx = True
+                ltx_model = f
+                print(f"   🎬 LTX Video: {f}")
+                break
+    
+    # Prioridad: Klein 9B (para LoRAs try-on/try-off) > NVFP4 > fp8
+    klein_names = ["flux2-klein-9b.safetensors", "flux2-klein-base-9b.safetensors"]
+    klein_found = None
+    for name in klein_names:
+        if os.path.exists(f"{models_dir}/{name}"):
+            klein_found = name
+            break
+    
+    if klein_found:
+        has_tryon_lora = any('tryon' in f.lower() for f in loras)
+        has_tryoff_lora = any('tryoff' in f.lower() or 'try-off' in f.lower() for f in loras)
+        tryon_lora_name = next((f for f in loras if 'tryon' in f.lower()), None)
+        tryoff_lora_name = next((f for f in loras if 'tryoff' in f.lower() or 'try-off' in f.lower()), None)
+        
+        print(f"   ⚡ Seleccionado: Klein 9B (try-on: {has_tryon_lora}, try-off: {has_tryoff_lora}, video: {has_ltx})")
+        return {
+            "name": klein_found,
+            "dtype": "default",  # bf16 nativo en 96GB
+            "model_type": "klein",
+            "has_tryon_lora": has_tryon_lora,
+            "has_tryoff_lora": has_tryoff_lora,
+            "tryon_lora_name": tryon_lora_name,
+            "tryoff_lora_name": tryoff_lora_name,
+            "has_ltx": has_ltx,
+            "ltx_model": ltx_model,
+        }
+    elif os.path.exists(f"{models_dir}/flux2-dev-nvfp4.safetensors"):
+        print("   ⚡ Seleccionado: NVFP4 puro (fallback, sin LoRA try-on)")
+        return {"name": "flux2-dev-nvfp4.safetensors", "dtype": "default", "model_type": "dev"}
     elif os.path.exists(f"{models_dir}/flux2-dev-nvfp4-mixed.safetensors"):
         print("   ⚡ Seleccionado: NVFP4-mixed")
-        return {"name": "flux2-dev-nvfp4-mixed.safetensors", "dtype": "default"}
+        return {"name": "flux2-dev-nvfp4-mixed.safetensors", "dtype": "default", "model_type": "dev"}
     elif os.path.exists(f"{models_dir}/flux2_dev_fp8mixed.safetensors"):
         print("   📦 Seleccionado: fp8 (del template)")
-        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "fp8_e4m3fn_fast"}
+        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "fp8_e4m3fn_fast", "model_type": "dev"}
     else:
         print("   ⚠️ Ningún modelo encontrado, usando default")
-        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
+        return {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default", "model_type": "dev"}
 
 # Se inicializa al arrancar
-UNET_CONFIG = {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default"}
+UNET_CONFIG = {"name": "flux2_dev_fp8mixed.safetensors", "dtype": "default", "model_type": "dev"}
 
 print(f"""
 ╔═══════════════════════════════════════════════╗
@@ -185,15 +227,28 @@ def wait_for_comfy_result(job_id, prompt_id, output_node_id, max_wait=180, total
             if prompt_id in history:
                 outputs = history[prompt_id].get('outputs', {})
                 
-                if output_node_id in outputs and outputs[output_node_id].get('images'):
-                    image_info = outputs[output_node_id]['images'][0]
-                    result_filename = image_info['filename']
-                    result_subfolder = image_info.get('subfolder', '')
+                if output_node_id in outputs:
+                    node_output = outputs[output_node_id]
                     
-                    result_path = f"/workspace/ComfyUI/output/{result_subfolder}/{result_filename}" if result_subfolder else f"/workspace/ComfyUI/output/{result_filename}"
+                    # Buscar resultado: images (SaveImage) o gifs (VHS_VideoCombine)
+                    result_info = None
+                    if node_output.get('images'):
+                        result_info = node_output['images'][0]
+                    elif node_output.get('gifs'):
+                        result_info = node_output['gifs'][0]
+                    elif node_output.get('videos'):
+                        result_info = node_output['videos'][0]
                     
-                    update_job_progress(job_id, 90, "Subiendo resultado...")
-                    return result_path
+                    if result_info:
+                        result_filename = result_info['filename']
+                        result_subfolder = result_info.get('subfolder', '')
+                        result_type = result_info.get('type', 'output')
+                        
+                        base_dir = f"/workspace/ComfyUI/{result_type}" if result_type != 'output' else "/workspace/ComfyUI/output"
+                        result_path = f"{base_dir}/{result_subfolder}/{result_filename}" if result_subfolder else f"{base_dir}/{result_filename}"
+                        
+                        update_job_progress(job_id, 90, "Subiendo resultado...")
+                        return result_path
                 
                 # Verificar errores
                 status = history[prompt_id].get('status', {})
@@ -693,6 +748,470 @@ CRITICAL REQUIREMENTS:
 Quality: 4K, consistent lighting, photorealistic, seamless white background."""
     
     return prompt
+
+
+# ============================================
+# KLEIN TRY-ON + LTX-2.3 VIDEO (NUEVO)
+# ============================================
+
+def execute_klein_tryon(job):
+    """
+    Try-On con FLUX Klein 9B + LoRA fal/flux-klein-9b-virtual-tryon-lora
+    
+    Input: avatar (person) + hasta 2 prendas (top + bottom)
+    Prompt format: TRYON [person desc]. Replace the outfit with [top] and [bottom]...
+    Output: imagen de la persona vistiendo las prendas
+    """
+    
+    job_id = job['id']
+    print(f"👗 [Job {job_id}] Ejecutando Try-On con Klein LoRA...")
+    
+    COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
+    Path(COMFY_INPUT_DIR).mkdir(parents=True, exist_ok=True)
+    
+    # 1. Descargar avatar (persona)
+    avatar_url = job['input_data']['avatar_url']
+    avatar_filename = f"person_{job_id}.jpg"
+    avatar_path = f"{COMFY_INPUT_DIR}/{avatar_filename}"
+    download_image(avatar_url, avatar_path)
+    
+    # 2. Descargar prendas y separar top/bottom
+    garments = job['input_data'].get('garment_images', [])
+    products_metadata = job['input_data'].get('products_metadata', [])
+    
+    top_filename = None
+    bottom_filename = None
+    top_desc = "the current top unchanged"
+    bottom_desc = "the current bottom unchanged"
+    
+    for idx, garment in enumerate(garments[:2]):
+        filename = f"garment_{job_id}_{idx}.jpg"
+        path = f"{COMFY_INPUT_DIR}/{filename}"
+        download_image(garment['url'], path)
+        
+        cat = garment.get('category', '')
+        if not cat and idx < len(products_metadata):
+            cat = products_metadata[idx].get('category', '')
+        name = products_metadata[idx].get('name', 'clothing') if idx < len(products_metadata) else 'clothing'
+        
+        if cat in ('top', 'outerwear', 'dress', 'set') or (top_filename is None and cat not in ('bottom', 'shoes', 'footwear')):
+            top_filename = filename
+            top_desc = name
+        else:
+            bottom_filename = filename
+            bottom_desc = name
+    
+    # Si falta alguna prenda, usar avatar como placeholder
+    if top_filename is None:
+        top_filename = avatar_filename
+    if bottom_filename is None:
+        bottom_filename = avatar_filename
+    
+    # 3. Construir prompt TRYON
+    avatar_info = None
+    try:
+        user_id = job['user_id']
+        resp = supabase.table('virtual_avatars').select(
+            'grok_facial_features, grok_body_analysis'
+        ).eq('user_id', user_id).maybe_single().execute()
+        if resp.data:
+            avatar_info = resp.data
+    except:
+        pass
+    
+    person_desc = build_model_description(avatar_info) if avatar_info else "person"
+    
+    prompt = f"TRYON {person_desc}, standing casually. Replace the outfit with {top_desc} and {bottom_desc} as shown in the reference images. The final image is a full body shot."
+    
+    print(f"📝 [Job {job_id}] Prompt: {prompt[:200]}...")
+    
+    seed = int(time.time()) % 999999999
+    lora_name = UNET_CONFIG.get('tryon_lora_name', 'flux-klein-tryon-comfy.safetensors')
+    
+    # 4. Workflow ComfyUI: Klein base + LoRA try-on + 3 imágenes
+    workflow = {
+        # === MODELOS ===
+        "12": {
+            "inputs": {
+                "unet_name": UNET_CONFIG["name"],
+                "weight_dtype": UNET_CONFIG["dtype"]
+            },
+            "class_type": "UNETLoader"
+        },
+        # LoRA Try-On aplicado sobre Klein
+        "70": {
+            "inputs": {
+                "lora_name": lora_name,
+                "strength_model": 1.0,
+                "model": ["12", 0]
+            },
+            "class_type": "LoraLoaderModelOnly"
+        },
+        "38": {
+            "inputs": {
+                "clip_name": "mistral_3_small_flux2_bf16.safetensors",
+                "type": "flux2",
+                "device": "default"
+            },
+            "class_type": "CLIPLoader"
+        },
+        "10": {
+            "inputs": {"vae_name": "flux2-vae.safetensors"},
+            "class_type": "VAELoader"
+        },
+        
+        # === PROMPT con trigger TRYON ===
+        "6": {
+            "inputs": {"text": prompt, "clip": ["38", 0]},
+            "class_type": "CLIPTextEncode"
+        },
+        "26": {
+            "inputs": {"guidance": 2.5, "conditioning": ["6", 0]},
+            "class_type": "FluxGuidance"
+        },
+        
+        # === IMAGE 1: Persona ===
+        "42": {
+            "inputs": {"image": avatar_filename},
+            "class_type": "LoadImage"
+        },
+        "60": {
+            "inputs": {"megapixels": 1.0, "image": ["42", 0]},
+            "class_type": "FluxKontextImageScale"
+        },
+        "40": {
+            "inputs": {"pixels": ["60", 0], "vae": ["10", 0]},
+            "class_type": "VAEEncode"
+        },
+        "39": {
+            "inputs": {"conditioning": ["26", 0], "latent": ["40", 0]},
+            "class_type": "ReferenceLatent"
+        },
+        
+        # === IMAGE 2: Top garment ===
+        "50": {
+            "inputs": {"image": top_filename},
+            "class_type": "LoadImage"
+        },
+        "51": {
+            "inputs": {"megapixels": 1.0, "image": ["50", 0]},
+            "class_type": "FluxKontextImageScale"
+        },
+        "52": {
+            "inputs": {"pixels": ["51", 0], "vae": ["10", 0]},
+            "class_type": "VAEEncode"
+        },
+        "53": {
+            "inputs": {"conditioning": ["39", 0], "latent": ["52", 0]},
+            "class_type": "ReferenceLatent"
+        },
+        
+        # === IMAGE 3: Bottom garment ===
+        "54": {
+            "inputs": {"image": bottom_filename},
+            "class_type": "LoadImage"
+        },
+        "55": {
+            "inputs": {"megapixels": 1.0, "image": ["54", 0]},
+            "class_type": "FluxKontextImageScale"
+        },
+        "56": {
+            "inputs": {"pixels": ["55", 0], "vae": ["10", 0]},
+            "class_type": "VAEEncode"
+        },
+        "57": {
+            "inputs": {"conditioning": ["53", 0], "latent": ["56", 0]},
+            "class_type": "ReferenceLatent"
+        },
+        
+        # === GUIDER con modelo + LoRA ===
+        "22": {
+            "inputs": {
+                "model": ["70", 0],
+                "conditioning": ["57", 0]
+            },
+            "class_type": "BasicGuider"
+        },
+        
+        # === SAMPLING ===
+        "25": {"inputs": {"noise_seed": seed}, "class_type": "RandomNoise"},
+        "16": {"inputs": {"sampler_name": "euler"}, "class_type": "KSamplerSelect"},
+        "48": {
+            "inputs": {
+                "steps": 28,      # Recomendado por la model card
+                "denoise": 0.85,
+                "width": 768,
+                "height": 1344    # 9:16 portrait
+            },
+            "class_type": "Flux2Scheduler"
+        },
+        "13": {
+            "inputs": {
+                "noise": ["25", 0],
+                "guider": ["22", 0],
+                "sampler": ["16", 0],
+                "sigmas": ["48", 0],
+                "latent_image": ["40", 0]
+            },
+            "class_type": "SamplerCustomAdvanced"
+        },
+        
+        # === DECODE Y GUARDAR ===
+        "8": {
+            "inputs": {"samples": ["13", 0], "vae": ["10", 0]},
+            "class_type": "VAEDecode"
+        },
+        "9": {
+            "inputs": {"filename_prefix": f"tryon_{job_id}", "images": ["8", 0]},
+            "class_type": "SaveImage"
+        }
+    }
+    
+    # Enviar a ComfyUI
+    update_job_progress(job_id, 15, "Enviando a GPU (Klein LoRA)...")
+    
+    payload = {"prompt": workflow, "client_id": WORKER_ID}
+    resp = requests.post(f"{COMFY_URL}/prompt", json=payload, timeout=30)
+    resp.raise_for_status()
+    
+    prompt_id = resp.json()['prompt_id']
+    print(f"📤 [Job {job_id}] Klein try-on prompt_id: {prompt_id}")
+    
+    update_job_progress(job_id, 20, "Generando look con Klein LoRA...")
+    
+    result_path = wait_for_comfy_result(job_id, prompt_id, '9', max_wait=120, total_steps=28)
+    
+    print(f"✅ [Job {job_id}] Try-on Klein completado: {result_path}")
+    return result_path
+
+
+def build_lookbook_video_prompt(products_metadata):
+    """
+    Genera prompt dinámico para LTX-2.3 video lookbook.
+    Shot 1 = frontal con cara visible (identidad del usuario)
+    Shots 2-5 = zooms en items SIN cara (evita pérdida de referencia facial)
+    """
+    garments = [{'name': p.get('name', 'item'), 'category': p.get('category', 'top')} for p in products_metadata]
+    
+    shots = [
+        "Shot 1 (0-1s): Frontal full-body hero shot matching the reference "
+        "pose exactly. Face visible. This shot establishes the identity."
+    ]
+    
+    shot_templates = {
+        'top': "camera at chest height focusing on the top garment. Frame from shoulders to waist showing fabric detail. Face cropped out.",
+        'outerwear': "rear-side camera at roughly 120 degree angle showing the back and side silhouette of the jacket. Face not visible.",
+        'bottom': "low camera placed near the floor focusing on trousers and shoes. Frame from knees to floor. Face not visible.",
+        'shoes': "very low camera at floor level, close-up of footwear detail. Frame feet and ankles only. Face not visible.",
+        'footwear': "very low camera at floor level, close-up of footwear. Frame feet and ankles only. Face not visible.",
+        'dress': "rear-side camera showing the full dress silhouette from behind at 120 degree angle. Face not visible.",
+        'set': "camera at hip height showing the full outfit coordination. Frame from chest to knees. Face cropped out.",
+        'accessories': "high fashion camera above shoulder height looking down at the accessory detail. Face cropped out.",
+        'bag': "camera at hip height focusing on the handbag. Frame from waist to thighs. Face not visible.",
+    }
+    
+    fallback_shots = [
+        "High fashion camera above shoulder height looking downward toward the torso. Frame chest to waist. Face cropped out.",
+        "Diagonal observer camera from behind the model at third-person fashion perspective. Frame upper back and shoulders. Face not visible.",
+        "Rear-side camera placed behind the model at roughly 120 degree angle. Shows back silhouette of the outfit. Face not visible.",
+    ]
+    
+    used_cats = set()
+    shot_num = 2
+    for g in garments:
+        if shot_num > 5:
+            break
+        cat = g['category']
+        if cat in used_cats:
+            continue
+        template = shot_templates.get(cat, fallback_shots[0])
+        shots.append(f"Shot {shot_num} ({shot_num-1}-{shot_num}s): {template}")
+        used_cats.add(cat)
+        shot_num += 1
+    
+    fi = 0
+    while shot_num <= 5 and fi < len(fallback_shots):
+        shots.append(f"Shot {shot_num} ({shot_num-1}-{shot_num}s): {fallback_shots[fi]}")
+        shot_num += 1
+        fi += 1
+    
+    outfit_desc = ", ".join([g['name'] for g in garments])
+    
+    return f"""Professional fashion lookbook video generated from the reference image.
+
+The model remains completely still in the same pose as the reference image.
+The body posture and gaze direction never change. Only the camera positions change.
+
+The exact same outfit must remain identical in every shot: {outfit_desc}.
+No garment redesign and no color changes.
+
+The video lasts 5 seconds total with hard cuts between shots.
+Each shot uses a different STATIC camera placed around the model.
+Cameras do not move. No zoom. No push-in. No orbit.
+
+SHOT STRUCTURE:
+{chr(10).join(shots)}
+
+LIGHTING: Clean editorial studio lighting, identical across all shots.
+
+CONSTRAINTS:
+Same exact outfit in every shot. No garment morphing. No color change.
+No pose change. No gaze change. No camera movement.
+No face visible after the first shot. No artifacts. No flicker."""
+
+
+def generate_lookbook_video(job_id, tryon_image_path, user_id, products_metadata):
+    """
+    Generar video lookbook usando LTX-2.3 LOCAL en ComfyUI.
+    Con --highvram y 96GB, LTX-2.3 YA está cargado en VRAM.
+    Sin swap, inferencia directa.
+    """
+    
+    print(f"🎬 [Job {job_id}] Generando video lookbook con LTX-2.3 LOCAL...")
+    
+    import shutil
+    COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
+    video_input_filename = f"tryon_for_video_{job_id}.jpg"
+    video_input_path = f"{COMFY_INPUT_DIR}/{video_input_filename}"
+    shutil.copy2(tryon_image_path, video_input_path)
+    
+    prompt = build_lookbook_video_prompt(products_metadata)
+    print(f"📝 [Job {job_id}] Video prompt:\n{prompt[:300]}...")
+    
+    update_job_progress(job_id, 60, "Generando video lookbook...")
+    
+    seed = int(time.time()) % 999999999
+    ltx_model = UNET_CONFIG.get('ltx_model', 'ltx-2.3-22b-distilled.safetensors')
+    
+    # Workflow ComfyUI para LTX-2.3 image-to-video
+    # Usa nodos de ComfyUI-LTXVideo / ComfyUI-VideoHelperSuite
+    video_workflow = {
+        # Cargar modelo LTX-2.3
+        "1": {
+            "inputs": {"ckpt_name": ltx_model},
+            "class_type": "CheckpointLoaderSimple"
+        },
+        # Cargar imagen try-on como referencia
+        "2": {
+            "inputs": {"image": video_input_filename},
+            "class_type": "LoadImage"
+        },
+        # Encode prompt
+        "3": {
+            "inputs": {"text": prompt, "clip": ["1", 1]},
+            "class_type": "CLIPTextEncode"
+        },
+        # Negative (vacío)
+        "31": {
+            "inputs": {"text": "", "clip": ["1", 1]},
+            "class_type": "CLIPTextEncode"
+        },
+        # Empty latent video: 5s @ 25fps portrait
+        "4": {
+            "inputs": {
+                "width": 768,
+                "height": 1344,
+                "length": 121,    # 5s * 25fps = 125, redondear a 121 (div por 8+1)
+                "batch_size": 1
+            },
+            "class_type": "EmptyLTXVLatentVideo"
+        },
+        # LTX Conditioning con imagen de referencia como frame 0
+        "5": {
+            "inputs": {
+                "positive": ["3", 0],
+                "negative": ["31", 0],
+                "vae": ["1", 2],
+                "image": ["2", 0],
+                "frame_idx": 0
+            },
+            "class_type": "LTXVConditioning"
+        },
+        # Sampler
+        "6": {
+            "inputs": {
+                "seed": seed,
+                "steps": 8,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 1.0,
+                "model": ["1", 0],
+                "positive": ["5", 0],
+                "negative": ["5", 1],
+                "latent_image": ["4", 0]
+            },
+            "class_type": "KSampler"
+        },
+        # Decode
+        "7": {
+            "inputs": {"samples": ["6", 0], "vae": ["1", 2]},
+            "class_type": "VAEDecode"
+        },
+        # Guardar video como MP4 (via VideoHelperSuite)
+        "8": {
+            "inputs": {
+                "frame_rate": 25,
+                "loop_count": 0,
+                "filename_prefix": f"lookbook_{job_id}",
+                "format": "video/h264-mp4",
+                "save_output": True,
+                "images": ["7", 0]
+            },
+            "class_type": "VHS_VideoCombine"
+        }
+    }
+    
+    payload = {"prompt": video_workflow, "client_id": WORKER_ID}
+    
+    print(f"📤 [Job {job_id}] Enviando workflow LTX-2.3 a ComfyUI...")
+    resp = requests.post(f"{COMFY_URL}/prompt", json=payload, timeout=30)
+    resp.raise_for_status()
+    
+    prompt_id = resp.json()['prompt_id']
+    print(f"📤 [Job {job_id}] Video prompt_id: {prompt_id}")
+    
+    update_job_progress(job_id, 65, "Procesando video en GPU...")
+    
+    # Esperar resultado (video tarda más que imagen)
+    result_path = wait_for_comfy_result(
+        job_id, prompt_id, '8',
+        max_wait=300,     # 5 min máx
+        total_steps=8
+    )
+    
+    print(f"✅ [Job {job_id}] Video generado: {result_path}")
+    
+    # Subir video a Supabase Storage
+    update_job_progress(job_id, 88, "Subiendo video...")
+    
+    with open(result_path, 'rb') as f:
+        video_data = f.read()
+    
+    video_filename = f"lookbook_{user_id}_{job_id}_{int(time.time())}.mp4"
+    storage_path = f"{user_id}/videos/{video_filename}"
+    
+    supabase.storage.from_("avatars").upload(
+        storage_path,
+        video_data,
+        file_options={"content-type": "video/mp4", "upsert": False}
+    )
+    
+    public_url = supabase.storage.from_("avatars").get_public_url(storage_path)
+    if isinstance(public_url, dict):
+        public_url = public_url.get('publicUrl') or public_url.get('publicURL') or str(public_url)
+    
+    print(f"✅ [Job {job_id}] Video subido: {public_url[:80]}...")
+    
+    # Limpiar
+    try:
+        os.remove(video_input_path)
+        os.remove(result_path)
+    except:
+        pass
+    
+    return public_url
+
 
 def execute_face_enhancement(job):
     """
@@ -1486,7 +2005,7 @@ def upload_result_to_supabase(job_id, user_id, result_path):
         raise
 
 def process_job(job):
-    """Procesar un job completo"""
+    """Procesar un job completo — con video lookbook para try-on"""
     
     job_id = job['id']
     user_id = job['user_id']
@@ -1512,40 +2031,60 @@ def process_job(job):
             }
         }).eq('id', job_id).execute()
         
-        # Ejecutar según tipo de job
         job_type = job.get('job_type', 'tryon')
         
+        # ========================================
+        # FACE ENHANCEMENT / AVATAR (sin cambios)
+        # ========================================
         if job_type == 'face_enhancement':
             result_path = execute_face_enhancement(job)
-        elif job_type == 'avatar_generation':
-            result_path = execute_avatar_generation(job)
-        else:
-            # Default: try-on
-            result_path = execute_flux_direct(job)
-        
-        # Actualizar progreso
-        supabase.table('ai_generation_jobs').update({
-            'progress': 90
-        }).eq('id', job_id).execute()
-        
-        # Subir resultado a Storage
-        public_url = upload_result_to_supabase(job_id, user_id, result_path)
-        
-        # Guardar resultado según tipo de job
-        if job_type == 'face_enhancement':
-            # Actualizar profiles con la cara HD
+            public_url = upload_result_to_supabase(job_id, user_id, result_path)
+            
             supabase.table('profiles').update({
                 'face_hd_url': public_url,
                 'face_enhanced_at': datetime.utcnow().isoformat()
             }).eq('id', user_id).execute()
             print(f"✅ [Job {job_id}] Face HD guardada en profiles.face_hd_url")
-        elif job_type == 'avatar_generation':
-            # Actualizar virtual_avatars con el avatar base
-            # Primero verificar si existe el registro
-            existing = supabase.table('virtual_avatars').select('id').eq('user_id', user_id).execute()
             
+            # Auto-trigger avatar si tiene flag
+            if job.get('input_data', {}).get('auto_generate_avatar'):
+                try:
+                    profile_resp = supabase.table('profiles').select('gender, height_cm').eq('id', user_id).single().execute()
+                    profile_data = profile_resp.data if profile_resp.data else {}
+                    supabase.table('ai_generation_jobs').insert({
+                        'user_id': user_id,
+                        'job_type': 'avatar_generation',
+                        'status': 'pending',
+                        'preferred_backend': 'vast',
+                        'priority': 9,
+                        'input_data': {
+                            'face_hd_url': public_url,
+                            'gender': profile_data.get('gender') or job['input_data'].get('gender'),
+                            'body_analysis': job['input_data'].get('body_analysis', {}),
+                            'height_cm': profile_data.get('height_cm') or job['input_data'].get('height_cm', 170),
+                        },
+                    }).execute()
+                    print(f"🎭 [Job {job_id}] Auto-encolado avatar_generation")
+                except Exception as auto_err:
+                    print(f"⚠️ [Job {job_id}] Error auto-encolando avatar: {auto_err}")
+            
+            # Completar job
+            processing_time = time.time() - start_time
+            supabase.table('ai_generation_jobs').update({
+                'status': 'completed', 'progress': 100, 'result_url': public_url,
+                'completed_at': datetime.utcnow().isoformat(),
+                'processing_time_seconds': round(processing_time, 2), 'cost_usd': 0.005,
+            }).eq('id', job_id).execute()
+            try: os.remove(result_path)
+            except: pass
+            return True
+        
+        elif job_type == 'avatar_generation':
+            result_path = execute_avatar_generation(job)
+            public_url = upload_result_to_supabase(job_id, user_id, result_path)
+            
+            existing = supabase.table('virtual_avatars').select('id').eq('user_id', user_id).execute()
             if existing.data and len(existing.data) > 0:
-                # Actualizar registro existente
                 supabase.table('virtual_avatars').update({
                     'base_avatar_url': public_url,
                     'base_avatar_generated_at': datetime.utcnow().isoformat(),
@@ -1553,80 +2092,149 @@ def process_job(job):
                     'updated_at': datetime.utcnow().isoformat()
                 }).eq('user_id', user_id).execute()
             else:
-                # Crear nuevo registro
                 supabase.table('virtual_avatars').insert({
-                    'user_id': user_id,
-                    'base_avatar_url': public_url,
+                    'user_id': user_id, 'base_avatar_url': public_url,
                     'base_avatar_generated_at': datetime.utcnow().isoformat(),
                     'base_avatar_status': 'completed'
                 }).execute()
             
-            # También guardar en profiles como fallback
             supabase.table('profiles').update({
                 'avatar_url': public_url,
                 'avatar_generated_at': datetime.utcnow().isoformat()
             }).eq('id', user_id).execute()
-            print(f"✅ [Job {job_id}] Avatar guardado en virtual_avatars.base_avatar_url")
+            print(f"✅ [Job {job_id}] Avatar guardado")
+            
+            processing_time = time.time() - start_time
+            supabase.table('ai_generation_jobs').update({
+                'status': 'completed', 'progress': 100, 'result_url': public_url,
+                'completed_at': datetime.utcnow().isoformat(),
+                'processing_time_seconds': round(processing_time, 2), 'cost_usd': 0.005,
+            }).eq('id', job_id).execute()
+            try: os.remove(result_path)
+            except: pass
+            return True
+        
         else:
-            # Try-on: guardar en tryon_results
-            supabase.table('tryon_results').insert({
+            # ========================================
+            # TRY-ON: Imagen + Video Lookbook
+            # ========================================
+            
+            # PASO 1: Generar imagen try-on
+            if UNET_CONFIG.get('model_type') == 'klein' and UNET_CONFIG.get('has_tryon_lora'):
+                result_path = execute_klein_tryon(job)
+            else:
+                result_path = execute_flux_direct(job)  # Fallback a Kontext
+            
+            # Subir imagen a Storage
+            tryon_image_url = upload_result_to_supabase(job_id, user_id, result_path)
+            
+            # ========================================
+            # ENVIAR IMAGEN A LA APP INMEDIATAMENTE
+            # La app la recibe vía Realtime a los ~15s
+            # ========================================
+            products_metadata = job['input_data'].get('products_metadata', [])
+            
+            supabase.table('ai_generation_jobs').update({
+                'progress': 55,
+                'result_url': tryon_image_url,
+                'result_metadata': {
+                    'worker_id': WORKER_ID,
+                    'backend': 'vast',
+                    'tryon_image_url': tryon_image_url,
+                    'video_status': 'generating',
+                    'status_message': 'Look generado! Generando video lookbook...'
+                }
+            }).eq('id', job_id).execute()
+            
+            # Insertar en tryon_results (imagen ya disponible)
+            tryon_insert = supabase.table('tryon_results').insert({
                 'user_id': user_id,
                 'job_id': job_id,
-                'result_url': public_url,
-                'products_used': job['input_data'].get('products_metadata', [])
+                'result_url': tryon_image_url,
+                'products_used': products_metadata,
+                'video_status': 'generating',
             }).execute()
-        
-        # Marcar job como completado
-        processing_time = time.time() - start_time
-        
-        supabase.table('ai_generation_jobs').update({
-            'status': 'completed',
-            'progress': 100,
-            'result_url': public_url,
-            'completed_at': datetime.utcnow().isoformat(),
-            'processing_time_seconds': round(processing_time, 2),
-            'cost_usd': 0.005,  # Costo estimado en Vast
-        }).eq('id', job_id).execute()
-        
-        # Notificar a Vast Manager que procesamos un job
-        try:
-            supabase.table('vast_instances').update({
-                'last_job_at': datetime.utcnow().isoformat(),
-                'status': 'ready',
-            }).eq('worker_id', WORKER_ID).execute()
-        except Exception as e:
-            print(f"⚠️ Error actualizando instancia: {e}")
-        
-        print(f"✅ [Job {job_id}] Completado en {processing_time:.1f}s")
-        
-        # Limpiar archivos temporales
-        try:
-            os.remove(result_path)
-        except:
-            pass
-        
-        return True
+            
+            tryon_result_id = tryon_insert.data[0]['id'] if tryon_insert.data else None
+            print(f"📸 [Job {job_id}] Imagen enviada a app, generando video...")
+            
+            # ========================================
+            # PASO 2: Generar video lookbook (LTX-2.3)
+            # Con 96GB + --highvram, LTX ya está cargado
+            # Si falla, la imagen ya se entregó
+            # ========================================
+            video_url = None
+            try:
+                has_ltx = UNET_CONFIG.get('has_ltx', False)
+                if has_ltx:
+                    video_url = generate_lookbook_video(
+                        job_id, result_path, user_id, products_metadata
+                    )
+                    if tryon_result_id:
+                        supabase.table('tryon_results').update({
+                            'video_url': video_url,
+                            'video_status': 'completed',
+                        }).eq('id', tryon_result_id).execute()
+                    print(f"🎬 [Job {job_id}] Video lookbook listo!")
+                else:
+                    print(f"⚠️ [Job {job_id}] LTX-2.3 no disponible, skip video")
+                    if tryon_result_id:
+                        supabase.table('tryon_results').update({
+                            'video_status': 'skipped',
+                        }).eq('id', tryon_result_id).execute()
+            except Exception as video_err:
+                print(f"⚠️ [Job {job_id}] Video falló (imagen ya entregada): {video_err}")
+                if tryon_result_id:
+                    supabase.table('tryon_results').update({
+                        'video_status': 'failed',
+                    }).eq('id', tryon_result_id).execute()
+            
+            # ========================================
+            # COMPLETAR JOB
+            # ========================================
+            processing_time = time.time() - start_time
+            
+            supabase.table('ai_generation_jobs').update({
+                'status': 'completed',
+                'progress': 100,
+                'result_url': tryon_image_url,
+                'completed_at': datetime.utcnow().isoformat(),
+                'processing_time_seconds': round(processing_time, 2),
+                'cost_usd': 0.013 if video_url else 0.005,
+                'result_metadata': {
+                    'worker_id': WORKER_ID,
+                    'backend': 'vast',
+                    'tryon_image_url': tryon_image_url,
+                    'video_url': video_url,
+                    'video_status': 'completed' if video_url else ('failed' if UNET_CONFIG.get('has_ltx') else 'skipped'),
+                    'status_message': 'Look y video listos!' if video_url else 'Look generado',
+                }
+            }).eq('id', job_id).execute()
+            
+            # Notificar a Vast Manager
+            try:
+                supabase.table('vast_instances').update({
+                    'last_job_at': datetime.utcnow().isoformat(),
+                    'status': 'ready',
+                }).eq('worker_id', WORKER_ID).execute()
+            except:
+                pass
+            
+            print(f"✅ [Job {job_id}] Completado en {processing_time:.1f}s (video: {'✅' if video_url else '❌'})")
+            
+            try: os.remove(result_path)
+            except: pass
+            
+            return True
         
     except Exception as e:
         print(f"❌ [Job {job_id}] Error: {e}")
         
-        # Marcar job como fallido
         supabase.table('ai_generation_jobs').update({
             'status': 'failed',
             'error_message': str(e),
             'completed_at': datetime.utcnow().isoformat(),
         }).eq('id', job_id).execute()
-        
-        # Incrementar contador de fallos (skip por ahora - no crítico)
-        try:
-            supabase.postgrest.session.execute(
-                supabase.table('vast_instances')
-                .update({'jobs_failed': 'jobs_failed + 1'})
-                .eq('worker_id', WORKER_ID)
-                .build()
-            )
-        except:
-            pass  # No crítico si falla
         
         return False
 
