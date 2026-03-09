@@ -11,6 +11,12 @@
 # ============================================================
 
 set -e
+
+# Silenciar los servicios que spamean "startup paused until provisioning"
+# Redirigir sus logs para que no llenen la consola
+supervisorctl stop comfyui 2>/dev/null || true
+supervisorctl stop api-wrapper 2>/dev/null || true
+
 echo "🚀 [$(date)] LOOKS Provisioning iniciando..."
 echo "   Worker ID: $WORKER_ID"
 echo "   GitHub Repo: $GITHUB_REPO"
