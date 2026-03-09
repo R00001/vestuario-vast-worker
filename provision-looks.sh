@@ -3,7 +3,7 @@
 # LOOKS - Provisioning Script para Template Vast.ai ComfyUI
 # 
 # GPU: RTX 6000 96GB — carga todos los modelos simultáneamente
-# DISCO MÍNIMO: 150GB (recomendado 200GB)
+# DISCO MÍNIMO: 200GB
 # Modelos: FLUX Klein 9B + LoRAs (try-on/try-off) + LTX-2.3 (video)
 #
 # ENV VARS REQUERIDAS en Vast:
@@ -19,9 +19,9 @@ echo "   GPU: 96GB VRAM — todos los modelos residentes"
 # Verificar espacio en disco
 DISK_AVAIL=$(df -BG /workspace | tail -1 | awk '{print $4}' | sed 's/G//')
 echo "   Disco disponible: ${DISK_AVAIL}GB"
-if [ "$DISK_AVAIL" -lt 120 ]; then
-  echo "⚠️ ADVERTENCIA: Menos de 120GB disponibles. Se necesitan ~120GB para todos los modelos."
-  echo "   Recomendado: 150-200GB de disco en la instancia Vast."
+if [ "$DISK_AVAIL" -lt 180 ]; then
+  echo "⚠️ ADVERTENCIA: Menos de 180GB disponibles (hay ${DISK_AVAIL}GB)."
+  echo "   Se necesitan ~150GB para modelos. Configura ≥200GB en Vast."
 fi
 
 # Verificar HF_TOKEN
@@ -63,46 +63,82 @@ CHECKPOINTS_DIR="/workspace/ComfyUI/models/checkpoints"
 
 mkdir -p "$MODELS_DIR" "$LORAS_DIR" "$CHECKPOINTS_DIR"
 
-# --- FLUX Klein 9B base model (GATED — necesita HF_TOKEN) ---
-KLEIN_MODEL="flux2-klein-9b.safetensors"
-if [ ! -f "$MODELS_DIR/$KLEIN_MODEL" ]; then
+# --- FLUX Klein 9B base model (GATED — necesita HF_TOKEN + huggingface-cli) ---
+# No sabemos el nombre exacto del .safetensors, huggingface-cli lo descubre
+pip install -q huggingface_hub 2>/dev/null
+
+KLEIN_FOUND=$(ls "$MODELS_DIR"/*klein* 2>/dev/null | head -1)
+if [ -z "$KLEIN_FOUND" ]; then
   if [ ! -z "$HF_TOKEN" ]; then
-    echo "   Descargando FLUX Klein 9B base (~18GB bf16)..."
-    cd "$MODELS_DIR"
-    wget --progress=bar:force:noscroll \
-      --header="Authorization: Bearer $HF_TOKEN" \
-      "https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/resolve/main/flux2-klein-9b.safetensors" \
-      -O "$KLEIN_MODEL" 2>&1 | tail -n 5 || {
-      echo "   Probando nombre alternativo (klein-base)..."
-      wget --progress=bar:force:noscroll \
-        --header="Authorization: Bearer $HF_TOKEN" \
-        "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B/resolve/main/flux2-klein-base-9b.safetensors" \
-        -O "$KLEIN_MODEL" 2>&1 | tail -n 5 || {
-        echo "   Usando huggingface-cli como fallback..."
-        pip install -q huggingface_hub 2>/dev/null
-        huggingface-cli download black-forest-labs/FLUX.2-klein-9B \
-          --token "$HF_TOKEN" \
-          --local-dir "$MODELS_DIR" \
-          --include "*.safetensors" 2>&1 | tail -n 5 || {
-          echo "⚠️ Klein 9B no disponible, usando FLUX dev del template como fallback"
-        }
-      }
-    }
-    cd /workspace
+    echo "   Descargando FLUX Klein 9B base con huggingface-cli..."
+    echo "   (modelo gated, usando HF_TOKEN para autenticación)"
     
-    # Si Klein descargó OK, eliminar flux2_dev_fp8mixed para ahorrar ~12GB de disco
-    if [ -f "$MODELS_DIR/$KLEIN_MODEL" ] && [ -s "$MODELS_DIR/$KLEIN_MODEL" ]; then
-      echo "   🗑️ Eliminando flux2_dev_fp8mixed (Klein lo reemplaza, ahorra 12GB)..."
+    # Descargar TODO el repo Klein — huggingface-cli sabe qué archivos hay
+    python3 -c "
+import os, glob, shutil
+from huggingface_hub import hf_hub_download, list_repo_files
+
+token = os.environ.get('HF_TOKEN')
+models_dir = '$MODELS_DIR'
+
+# Probar ambos repos posibles
+repos = ['black-forest-labs/FLUX.2-klein-9B', 'black-forest-labs/FLUX.2-klein-base-9B']
+
+for repo in repos:
+    try:
+        print(f'Probando repo: {repo}')
+        files = list_repo_files(repo, token=token)
+        safetensors = [f for f in files if f.endswith('.safetensors')]
+        print(f'  Archivos safetensors: {safetensors}')
+        
+        # Buscar el archivo principal del transformer/unet
+        # Prioridad: archivo raíz > transformer/ > unet/
+        target = None
+        for f in safetensors:
+            if '/' not in f:  # archivo en raíz
+                target = f
+                break
+        if not target:
+            for f in safetensors:
+                if 'transformer' in f or 'unet' in f or 'diffusion' in f:
+                    target = f
+                    break
+        if not target and safetensors:
+            target = safetensors[0]
+        
+        if target:
+            print(f'  Descargando: {target}')
+            path = hf_hub_download(repo, target, local_dir='/tmp/klein_download', token=token)
+            # Copiar al directorio de modelos con nombre genérico
+            dest = os.path.join(models_dir, 'flux2-klein-9b.safetensors')
+            shutil.copy2(path, dest)
+            print(f'  ✓ Guardado en: {dest}')
+            print(f'  ✓ Tamaño: {os.path.getsize(dest) / 1e9:.1f}GB')
+            break
+        else:
+            print(f'  No safetensors en {repo}')
+    except Exception as e:
+        print(f'  Error con {repo}: {e}')
+        continue
+" 2>&1
+    
+    # Limpiar descarga temporal
+    rm -rf /tmp/klein_download 2>/dev/null
+    
+    # Verificar si descargó y limpiar modelo viejo
+    KLEIN_FOUND=$(ls "$MODELS_DIR"/*klein* 2>/dev/null | head -1)
+    if [ ! -z "$KLEIN_FOUND" ]; then
+      echo "   🗑️ Klein descargado OK. Eliminando flux2_dev_fp8mixed (ahorra 12GB)..."
       rm -f "$MODELS_DIR/flux2_dev_fp8mixed.safetensors" 2>/dev/null || true
-      rm -f "$MODELS_DIR/flux2-dev-nvfp4.safetensors" 2>/dev/null || true
-      rm -f "$MODELS_DIR/flux2-dev-nvfp4-mixed.safetensors" 2>/dev/null || true
+    else
+      echo "⚠️ Klein 9B no se pudo descargar. Usando FLUX dev como fallback."
     fi
   else
     echo "⚠️ HF_TOKEN no configurado — Klein 9B requiere autenticación"
     echo "   Usando FLUX dev del template como fallback (sin LoRA try-on)"
   fi
 else
-  echo "   ✓ Klein 9B ya existe"
+  echo "   ✓ Klein 9B ya existe: $KLEIN_FOUND"
 fi
 
 # --- Try-On LoRA (público, no necesita token) ---
@@ -140,56 +176,67 @@ echo ""
 echo "🎬 PASO 1.5: Descargando LTX-2.3 22B distilled para video..."
 echo ""
 
-# LTX-2.3 — puede ser gated también, intentar con y sin token
-LTX_DOWNLOADED=false
-for ltx_name in "ltx-2.3-22b-distilled.safetensors" "ltx2_3_distilled.safetensors"; do
-  if [ -f "$CHECKPOINTS_DIR/$ltx_name" ] && [ -s "$CHECKPOINTS_DIR/$ltx_name" ]; then
-    echo "   ✓ LTX-2.3 ya existe: $ltx_name"
-    LTX_DOWNLOADED=true
-    break
-  fi
-done
-
-if [ "$LTX_DOWNLOADED" = false ]; then
-  echo "   Descargando LTX-2.3 22B distilled..."
-  echo "   Esto puede tardar varios minutos (~44GB)..."
-  cd "$CHECKPOINTS_DIR"
+# LTX-2.3 — buscar y descargar con huggingface-cli
+LTX_FOUND=$(ls "$CHECKPOINTS_DIR"/*ltx* 2>/dev/null | head -1)
+if [ -z "$LTX_FOUND" ]; then
+  echo "   Descargando LTX-2.3 con huggingface-cli..."
+  echo "   Buscando versión distilled (8 steps, más rápida)..."
   
-  # Intentar con token primero, luego sin
-  HF_AUTH_HEADER=""
-  if [ ! -z "$HF_TOKEN" ]; then
-    HF_AUTH_HEADER="--header=Authorization: Bearer $HF_TOKEN"
-  fi
-  
-  # Intentar descarga directa
-  wget --progress=bar:force:noscroll \
-    $HF_AUTH_HEADER \
-    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled.safetensors" \
-    -O "ltx-2.3-22b-distilled.safetensors" 2>&1 | tail -n 5 || {
-    echo "   Probando con huggingface-cli..."
-    pip install -q huggingface_hub 2>/dev/null
-    python3 -c "
-import os
+  python3 -c "
+import os, shutil
 from huggingface_hub import hf_hub_download, list_repo_files
+
 token = os.environ.get('HF_TOKEN')
+checkpoints_dir = '$CHECKPOINTS_DIR'
+
 try:
     files = list_repo_files('Lightricks/LTX-2.3', token=token)
     safetensors = [f for f in files if f.endswith('.safetensors')]
-    print(f'Archivos safetensors: {safetensors}')
-    # Buscar distilled
-    distilled = [f for f in safetensors if 'distilled' in f.lower()]
-    target = distilled[0] if distilled else safetensors[0] if safetensors else None
+    print(f'Archivos en Lightricks/LTX-2.3:')
+    for f in files:
+        print(f'  {f}')
+    print(f'Safetensors: {safetensors}')
+    
+    # Prioridad: distilled > dev > cualquiera
+    target = None
+    for f in safetensors:
+        if 'distilled' in f.lower():
+            target = f
+            break
+    if not target:
+        for f in safetensors:
+            if 'dev' in f.lower() or '/' not in f:
+                target = f
+                break
+    if not target and safetensors:
+        target = safetensors[0]
+    
     if target:
         print(f'Descargando: {target}')
-        hf_hub_download('Lightricks/LTX-2.3', target, local_dir='$CHECKPOINTS_DIR', token=token)
-        print(f'OK: {target}')
+        path = hf_hub_download('Lightricks/LTX-2.3', target, local_dir='/tmp/ltx_download', token=token)
+        
+        # Nombre limpio para ComfyUI
+        basename = os.path.basename(target)
+        dest = os.path.join(checkpoints_dir, basename)
+        shutil.copy2(path, dest)
+        print(f'✓ Guardado: {dest}')
+        print(f'✓ Tamaño: {os.path.getsize(dest) / 1e9:.1f}GB')
     else:
-        print('No safetensors encontrados')
+        print('No safetensors encontrados en Lightricks/LTX-2.3')
 except Exception as e:
     print(f'Error: {e}')
-" 2>&1 || echo "⚠️ LTX-2.3 no disponible"
-  }
-  cd /workspace
+" 2>&1
+
+  rm -rf /tmp/ltx_download 2>/dev/null
+  
+  LTX_FOUND=$(ls "$CHECKPOINTS_DIR"/*ltx* 2>/dev/null | head -1)
+  if [ ! -z "$LTX_FOUND" ]; then
+    echo "   ✓ LTX-2.3 descargado: $LTX_FOUND"
+  else
+    echo "⚠️ LTX-2.3 no disponible — video lookbook desactivado"
+  fi
+else
+  echo "   ✓ LTX-2.3 ya existe: $LTX_FOUND"
 fi
 
 echo "✅ [$(date)] LTX-2.3 listo"
@@ -319,23 +366,10 @@ if [ -f /etc/supervisor/conf.d/comfyui.conf ]; then
   sed -i 's/--highvram --highvram/--highvram/g' /etc/supervisor/conf.d/comfyui.conf 2>/dev/null || true
 fi
 
-# Reiniciar ComfyUI
-echo "   Reiniciando ComfyUI con --highvram..."
-supervisorctl stop comfyui 2>/dev/null || true
-sleep 3
-supervisorctl start comfyui 2>/dev/null || true
-
-# Esperar ComfyUI
-MAX_WAIT=180
-WAITED=0
-while [ $WAITED -lt $MAX_WAIT ]; do
-  if curl -s http://localhost:18188/system_stats > /dev/null 2>&1; then
-    echo "   ✓ ComfyUI listo con --highvram"
-    break
-  fi
-  sleep 5
-  WAITED=$((WAITED + 5))
-done
+# NO reiniciar ComfyUI aquí — arrancará solo cuando provisioning termine
+# (el fichero /.provisioning bloquea ComfyUI hasta que este script acabe)
+# El worker tiene su propio bucle de espera en main_loop()
+echo "   ComfyUI arrancará con --highvram cuando provisioning termine"
 
 echo "✅ [$(date)] ComfyUI configurado"
 
