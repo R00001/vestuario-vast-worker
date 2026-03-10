@@ -317,9 +317,6 @@ if [ ! -d "ComfyUI-VideoHelperSuite" ]; then
   git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 2>/dev/null || echo "   no disponible"
 fi
 
-# Instalar opencv y ffmpeg ANTES de las deps de custom nodes
-pip install -q opencv-python-headless imageio-ffmpeg 2>/dev/null || true
-
 # Instalar dependencias de custom nodes
 for dir in */; do
   if [ -f "${dir}requirements.txt" ]; then
@@ -327,6 +324,11 @@ for dir in */; do
     pip install -r "${dir}requirements.txt" 2>/dev/null || true
   fi
 done
+
+# Forzar opencv-python-headless DESPUÉS de todo (requirements pueden instalar opencv-python que falla sin libGL)
+pip uninstall -y opencv-python 2>/dev/null || true
+pip install -q opencv-python-headless imageio-ffmpeg 2>/dev/null || true
+echo "   ✓ cv2 (headless) + ffmpeg instalados"
 
 cd /workspace
 
@@ -420,7 +422,7 @@ echo ""
 cat > /etc/supervisor/conf.d/looks-worker.conf << 'SUPERVISOR_EOF'
 [program:looks-worker]
 command=/bin/bash -c 'cd /workspace/worker && while [ -f /.provisioning ]; do echo "Esperando provisioning..." && sleep 5; done && while ! curl -s http://localhost:18188/system_stats > /dev/null 2>&1; do echo "Esperando ComfyUI..." && sleep 5; done && COMFYUI_API_BASE=http://localhost:18188 python3 -u worker_vast.py'
-environment=WORKER_ID="%(ENV_WORKER_ID)s",SUPABASE_URL="%(ENV_SUPABASE_URL)s",SUPABASE_KEY="%(ENV_SUPABASE_KEY)s"
+environment=WORKER_ID="%(ENV_WORKER_ID)s",SUPABASE_URL="%(ENV_SUPABASE_URL)s",SUPABASE_KEY="%(ENV_SUPABASE_KEY)s",HF_TOKEN="%(ENV_HF_TOKEN)s"
 directory=/workspace/worker
 autostart=true
 autorestart=true
