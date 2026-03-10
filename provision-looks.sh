@@ -10,13 +10,20 @@
 #   WORKER_ID, SUPABASE_URL, SUPABASE_KEY, GITHUB_REPO, HF_TOKEN
 # ============================================================
 
-set -e
+set -euo pipefail
 
 # Usar siempre el mismo entorno que ejecuta ComfyUI (/venv/main en el template de Vast)
 VENV_PY="/venv/main/bin/python"
-VENV_PIP="/venv/main/bin/pip"
 if [ ! -x "$VENV_PY" ]; then VENV_PY="$(command -v python3)"; fi
-if [ ! -x "$VENV_PIP" ]; then VENV_PIP="$VENV_PY -m pip"; fi
+PIP_CMD=("$VENV_PY" -m pip)
+
+pip_install() {
+  "${PIP_CMD[@]}" install "$@"
+}
+
+pip_uninstall() {
+  "${PIP_CMD[@]}" uninstall -y "$@"
+}
 
 # Silenciar los servicios que spamean "startup paused until provisioning"
 # Redirigir sus logs para que no llenen la consola
@@ -92,7 +99,7 @@ mkdir -p "$MODELS_DIR" "$LORAS_DIR" "$CHECKPOINTS_DIR"
 
 # --- FLUX Klein 9B base model (GATED — necesita HF_TOKEN + huggingface-cli) ---
 # No sabemos el nombre exacto del .safetensors, huggingface-cli lo descubre
-${VENV_PIP} install -q huggingface_hub 2>/dev/null
+pip_install -q huggingface_hub
 
 KLEIN_FOUND=$(ls "$MODELS_DIR"/*klein* 2>/dev/null | head -1)
 if [ -z "$KLEIN_FOUND" ]; then
@@ -376,28 +383,52 @@ apt-get install -y -qq ffmpeg 2>/dev/null || true
 for dir in */; do
   if [ -f "${dir}requirements.txt" ]; then
     echo "   Instalando deps para ${dir}..."
-    ${VENV_PIP} install -r "${dir}requirements.txt" 2>/dev/null || true
+    pip_install -r "${dir}requirements.txt"
   fi
 done
 
 # Dependencias extra para VideoHelperSuite/LTX
-${VENV_PIP} install -q opencv-python-headless imageio-ffmpeg av einops 2>/dev/null || true
-# Forzar headless DESPUÉS de todo (requirements pueden reinstalar opencv-python que falla sin libGL)
-${VENV_PIP} uninstall -y opencv-python 2>/dev/null || true
-${VENV_PIP} install -q opencv-python-headless 2>/dev/null || true
-echo "   ✓ cv2 (headless) + imageio-ffmpeg + av + ffmpeg instalados"
+# Dependencias oficiales de VideoHelperSuite: opencv-python + imageio-ffmpeg
+# En contenedores headless probamos primero la oficial; si falla import cv2, caemos a headless.
+echo "   Instalando dependencias oficiales de VideoHelperSuite en el mismo venv de ComfyUI..."
+pip_install opencv-python imageio-ffmpeg av einops
 
-# Verificación rápida de imports críticos para custom nodes de vídeo
-${VENV_PY} - <<'PYTHON_EOF' || true
+echo "   Verificando imports de vídeo en: $VENV_PY"
+if ! "$VENV_PY" - <<'PYTHON_EOF'
+import sys
 mods = ['cv2', 'imageio_ffmpeg', 'av']
+failed = []
 for mod in mods:
     try:
         __import__(mod)
         print(f'   ✓ import {mod}')
     except Exception as e:
+        failed.append((mod, str(e)))
         print(f'   ⚠️ import {mod} falló: {e}')
-print('   Python usado para verificar deps:', __import__('sys').executable)
+print('   Python usado para verificar deps:', sys.executable)
+raise SystemExit(1 if failed else 0)
 PYTHON_EOF
+then
+  echo "   Reintentando con opencv-python-headless (fallback para contenedores sin libGL)..."
+  pip_uninstall opencv-python || true
+  pip_install opencv-python-headless imageio-ffmpeg av einops
+  "$VENV_PY" - <<'PYTHON_EOF'
+import sys
+mods = ['cv2', 'imageio_ffmpeg', 'av']
+failed = []
+for mod in mods:
+    try:
+        __import__(mod)
+        print(f'   ✓ import {mod}')
+    except Exception as e:
+        failed.append((mod, str(e)))
+        print(f'   ✗ import {mod} falló: {e}')
+print('   Python usado para verificar deps:', sys.executable)
+if failed:
+    raise SystemExit(1)
+PYTHON_EOF
+fi
+echo "   ✓ VideoHelperSuite listo: cv2 + imageio-ffmpeg + av + ffmpeg"
 
 cd /workspace
 
@@ -440,7 +471,7 @@ if [ ! -z "$GITHUB_REPO" ]; then
   cd worker
   if [ -f requirements.txt ]; then
     echo "   Instalando dependencias..."
-    ${VENV_PIP} install -r requirements.txt
+    pip_install -r requirements.txt
   fi
   cd /workspace
 else
@@ -459,8 +490,8 @@ MAX_WAIT=60
 WAITED=0
 while [ $WAITED -lt $MAX_WAIT ]; do
   if ${VENV_PY} -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
-    echo "   ✓ CUDA: $(python3 -c 'import torch; print(torch.cuda.get_device_name(0))' 2>/dev/null)"
-    echo "   ✓ VRAM: $(python3 -c 'import torch; print(f\"{torch.cuda.get_device_properties(0).total_mem/1e9:.0f}GB\")' 2>/dev/null)"
+    echo "   ✓ CUDA: $($VENV_PY -c 'import torch; print(torch.cuda.get_device_name(0))' 2>/dev/null)"
+    echo "   ✓ VRAM: $($VENV_PY -c 'import torch; print(f\"{torch.cuda.get_device_properties(0).total_memory/1e9:.0f}GB\")' 2>/dev/null)"
     break
   fi
   sleep 2
@@ -490,7 +521,7 @@ echo ""
 
 cat > /etc/supervisor/conf.d/looks-worker.conf << 'SUPERVISOR_EOF'
 [program:looks-worker]
-command=/bin/bash -c 'cd /workspace/worker && while [ -f /.provisioning ]; do echo "Esperando provisioning..." && sleep 5; done && while ! curl -s http://localhost:18188/system_stats > /dev/null 2>&1; do echo "Esperando ComfyUI..." && sleep 5; done && COMFYUI_API_BASE=http://localhost:18188 python3 -u worker_vast.py'
+command=/bin/bash -c 'cd /workspace/worker && while [ -f /.provisioning ]; do echo "Esperando provisioning..." && sleep 5; done && while ! curl -s http://localhost:18188/system_stats > /dev/null 2>&1; do echo "Esperando ComfyUI..." && sleep 5; done && COMFYUI_API_BASE=http://localhost:18188 /venv/main/bin/python -u worker_vast.py'
 environment=WORKER_ID="%(ENV_WORKER_ID)s",SUPABASE_URL="%(ENV_SUPABASE_URL)s",SUPABASE_KEY="%(ENV_SUPABASE_KEY)s",HF_TOKEN="%(ENV_HF_TOKEN)s"
 directory=/workspace/worker
 autostart=true
@@ -509,22 +540,10 @@ echo "   Rearrancando ComfyUI..."
 supervisorctl start comfyui 2>/dev/null || true
 supervisorctl start api-wrapper 2>/dev/null || true
 
-# Verificar que los nodos críticos de vídeo hayan cargado realmente en ComfyUI
-for i in $(seq 1 30); do
-  if curl -sf http://localhost:18188/object_info > /tmp/comfy_object_info.json 2>/dev/null; then
-    if grep -q '"VHS_VideoCombine"' /tmp/comfy_object_info.json; then
-      echo "   ✓ Nodo VHS_VideoCombine cargado"
-      break
-    fi
-    echo "   Esperando a que ComfyUI cargue custom nodes de vídeo... ($i/30)"
-  fi
-  sleep 2
-done
-
-if [ -f /tmp/comfy_object_info.json ] && ! grep -q '"VHS_VideoCombine"' /tmp/comfy_object_info.json; then
-  echo "⚠️ VHS_VideoCombine sigue sin aparecer en /object_info"
-  echo "   Revisa /workspace/ComfyUI/user/comfyui.log para errores de carga"
-fi
+# Nota: mientras exista /.provisioning, el template pausa ComfyUI/api-wrapper.
+# Por eso NO validamos /object_info aquí: esa comprobación se hace útilmente desde el worker,
+# cuando ComfyUI ya está realmente levantado tras terminar el provisioning.
+echo "   Comprobación de nodos de vídeo diferida hasta que ComfyUI arranque de verdad"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
