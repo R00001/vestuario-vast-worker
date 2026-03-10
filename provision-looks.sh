@@ -215,47 +215,65 @@ echo ""
 LATENT_UPSCALE_DIR="/workspace/ComfyUI/models/latent_upscale_models"
 mkdir -p "$LATENT_UPSCALE_DIR"
 
-# 1. Modelo base LTX-2.3 fp8 (27GB) → checkpoints
-if [ ! -f "$CHECKPOINTS_DIR/ltx-2.3-22b-dev-fp8.safetensors" ]; then
-  echo "   Descargando LTX-2.3 base fp8 (~27GB)..."
-  wget --progress=bar:force:noscroll \
-    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-dev-fp8.safetensors" \
-    -O "$CHECKPOINTS_DIR/ltx-2.3-22b-dev-fp8.safetensors" 2>&1 | tail -n 5 || echo "⚠️ LTX base no disponible"
-else
-  echo "   ✓ LTX-2.3 base ya existe"
-fi
+# Descargar TODOS los modelos LTX con huggingface-cli (las URLs directas dan 404)
+python3 -c "
+import os, shutil
+from huggingface_hub import hf_hub_download, list_repo_files
+from pathlib import Path
 
-# 2. Gemma 3 text encoder (8.8GB) → text_encoders
-if [ ! -f "$TEXT_ENCODERS_DIR/gemma_3_12B_it_fp4_mixed.safetensors" ]; then
-  echo "   Descargando Gemma 3 12B text encoder (~8.8GB)..."
-  wget --progress=bar:force:noscroll \
-    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/gemma_3_12B_it_fp4_mixed.safetensors" \
-    -O "$TEXT_ENCODERS_DIR/gemma_3_12B_it_fp4_mixed.safetensors" 2>&1 | tail -n 5 || echo "⚠️ Gemma no disponible"
-else
-  echo "   ✓ Gemma 3 ya existe"
-fi
+token = os.environ.get('HF_TOKEN')
+checkpoints = '$CHECKPOINTS_DIR'
+text_encoders = '$TEXT_ENCODERS_DIR'
+loras = '$LORAS_DIR'
+upscale = '$LATENT_UPSCALE_DIR'
 
-# 3. LoRA distilled (7GB) → loras (NO checkpoints!)
-if [ ! -f "$LORAS_DIR/ltx-2.3-22b-distilled-lora-384.safetensors" ]; then
-  echo "   Descargando LTX LoRA distilled (~7GB)..."
-  wget --progress=bar:force:noscroll \
-    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled-lora-384.safetensors" \
-    -O "$LORAS_DIR/ltx-2.3-22b-distilled-lora-384.safetensors" 2>&1 | tail -n 5 || echo "⚠️ LTX LoRA no disponible"
-  # Limpiar si estaba en checkpoints por error
-  rm -f "$CHECKPOINTS_DIR/ltx-2.3-22b-distilled-lora-384.safetensors" 2>/dev/null
-else
-  echo "   ✓ LTX LoRA distilled ya existe"
-fi
+try:
+    files = list_repo_files('Lightricks/LTX-2.3', token=token)
+    safetensors = [f for f in files if f.endswith('.safetensors')]
+    print(f'Archivos safetensors en Lightricks/LTX-2.3:')
+    for f in safetensors:
+        print(f'  {f}')
+    
+    # Mapeo: qué descargar y dónde ponerlo
+    downloads = {
+        'dev-fp8': {'pattern': 'dev-fp8', 'dest_dir': checkpoints, 'desc': 'Base model fp8'},
+        'gemma': {'pattern': 'gemma', 'dest_dir': text_encoders, 'desc': 'Gemma text encoder'},
+        'distilled-lora': {'pattern': 'distilled-lora', 'dest_dir': loras, 'desc': 'Distilled LoRA'},
+        'upscaler': {'pattern': 'upscaler', 'dest_dir': upscale, 'desc': 'Spatial upscaler'},
+    }
+    
+    for key, info in downloads.items():
+        dest_dir = info['dest_dir']
+        # Buscar el archivo que coincide
+        matches = [f for f in safetensors if info['pattern'] in f.lower()]
+        if not matches:
+            print(f'  ⚠️ No encontrado: {info[\"desc\"]} (pattern: {info[\"pattern\"]})')
+            continue
+        
+        target = matches[0]
+        basename = os.path.basename(target)
+        dest_path = os.path.join(dest_dir, basename)
+        
+        if os.path.exists(dest_path):
+            print(f'  ✓ Ya existe: {basename}')
+            continue
+        
+        print(f'  Descargando {info[\"desc\"]}: {target}...')
+        Path(dest_dir).mkdir(parents=True, exist_ok=True)
+        path = hf_hub_download('Lightricks/LTX-2.3', target, token=token)
+        shutil.copy2(path, dest_path)
+        size_gb = os.path.getsize(dest_path) / 1e9
+        print(f'  ✓ {basename} ({size_gb:.1f}GB) → {dest_dir}/')
+    
+    # Limpiar LoRA de checkpoints si estaba ahí por error
+    wrong = os.path.join(checkpoints, 'ltx-2.3-22b-distilled-lora-384.safetensors')
+    if os.path.exists(wrong):
+        os.remove(wrong)
+        print(f'  🗑️ Limpiado LoRA de checkpoints (movido a loras)')
 
-# 4. Spatial upscaler (950MB) → latent_upscale_models
-if [ ! -f "$LATENT_UPSCALE_DIR/ltx-2.3-spatial-upscaler-x2-1.0.safetensors" ]; then
-  echo "   Descargando LTX spatial upscaler (~950MB)..."
-  wget --progress=bar:force:noscroll \
-    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.0.safetensors" \
-    -O "$LATENT_UPSCALE_DIR/ltx-2.3-spatial-upscaler-x2-1.0.safetensors" 2>&1 | tail -n 5 || echo "⚠️ Upscaler no disponible"
-else
-  echo "   ✓ LTX upscaler ya existe"
-fi
+except Exception as e:
+    print(f'Error descargando LTX-2.3: {e}')
+" 2>&1
 
 echo "✅ [$(date)] LTX-2.3 completo (base + Gemma + LoRA + upscaler)"
 
