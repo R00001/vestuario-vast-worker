@@ -141,6 +141,40 @@ def check_comfy_ready():
     except:
         return False
 
+AVAILABLE_NODES_CACHE = None
+
+
+def get_available_comfy_nodes(force_refresh=False):
+    """Lee /object_info para saber qué nodos tiene ComfyUI realmente cargados."""
+    global AVAILABLE_NODES_CACHE
+    if AVAILABLE_NODES_CACHE is not None and not force_refresh:
+        return AVAILABLE_NODES_CACHE
+    try:
+        resp = requests.get(f"{COMFY_URL}/object_info", timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        AVAILABLE_NODES_CACHE = set(data.keys())
+        return AVAILABLE_NODES_CACHE
+    except Exception as e:
+        print(f"⚠️ No se pudo leer /object_info de ComfyUI: {e}")
+        AVAILABLE_NODES_CACHE = set()
+        return AVAILABLE_NODES_CACHE
+
+
+def wait_for_comfy_nodes(required_nodes, timeout=90):
+    """Espera a que ComfyUI termine de cargar los custom nodes requeridos."""
+    deadline = time.time() + timeout
+    last_missing = set(required_nodes)
+    while time.time() < deadline:
+        available = get_available_comfy_nodes(force_refresh=True)
+        missing = {node for node in required_nodes if node not in available}
+        if not missing:
+            return True, set()
+        last_missing = missing
+        print(f"⏳ Esperando nodos de ComfyUI: {sorted(missing)}")
+        time.sleep(3)
+    return False, last_missing
+
 def update_job_progress(job_id, progress, message=None):
     """Actualizar progreso del job en Supabase (para Realtime)"""
     try:
@@ -978,6 +1012,17 @@ def generate_lookbook_video(job_id, tryon_image_path, user_id, products_metadata
     
     # Workflow ComfyUI para LTX-2.3 image-to-video
     # Usa nodos de ComfyUI-LTXVideo / ComfyUI-VideoHelperSuite
+    required_nodes = ["EmptyLTXVLatentVideo", "LTXVConditioning", "VHS_VideoCombine"]
+    ok, missing = wait_for_comfy_nodes(required_nodes, timeout=90)
+    if not ok:
+        custom_nodes_dir = "/workspace/ComfyUI/custom_nodes"
+        installed = sorted(os.listdir(custom_nodes_dir)) if os.path.exists(custom_nodes_dir) else []
+        raise Exception(
+            "Faltan nodos requeridos en ComfyUI: "
+            f"{', '.join(sorted(missing))}. "
+            f"custom_nodes instalados: {installed}"
+        )
+
     video_workflow = {
         # Cargar modelo LTX-2.3
         "1": {

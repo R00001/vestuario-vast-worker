@@ -3,7 +3,7 @@
 # LOOKS - Provisioning Script para Template Vast.ai ComfyUI
 # 
 # GPU: RTX 6000 96GB — carga todos los modelos simultáneamente
-# DISCO MÍNIMO: 250GB (modelos: Klein 17GB + LTX base 27GB + Gemma 9GB + LoRAs + template ~20GB)
+# DISCO MÍNIMO: 200GB (modelos: Klein 17GB + LTX base 27GB + Gemma 9GB + LoRAs + template ~20GB)
 # Modelos: FLUX Klein 9B + LoRAs (try-on/try-off) + LTX-2.3 (video)
 #
 # ENV VARS REQUERIDAS en Vast:
@@ -27,7 +27,7 @@ DISK_AVAIL=$(df -BG /workspace | tail -1 | awk '{print $4}' | sed 's/G//')
 echo "   Disco disponible: ${DISK_AVAIL}GB"
 if [ "$DISK_AVAIL" -lt 200 ]; then
   echo "⚠️ ADVERTENCIA: Menos de 200GB disponibles (hay ${DISK_AVAIL}GB)."
-  echo "   Se necesitan ~120GB para modelos. Configura ≥250GB en Vast."
+  echo "   Se necesitan ~120GB para modelos. Configura ≥200GB en Vast."
 fi
 
 # Verificar HF_TOKEN
@@ -357,7 +357,14 @@ fi
 if [ ! -d "ComfyUI-VideoHelperSuite" ]; then
   echo "   Instalando ComfyUI-VideoHelperSuite..."
   git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git 2>/dev/null || echo "   no disponible"
+else
+  echo "   Actualizando ComfyUI-VideoHelperSuite..."
+  git -C ComfyUI-VideoHelperSuite pull --ff-only 2>/dev/null || true
 fi
+
+# FFmpeg del sistema para VideoHelperSuite / export MP4
+apt-get update -qq 2>/dev/null || true
+apt-get install -y -qq ffmpeg 2>/dev/null || true
 
 # Instalar dependencias de custom nodes
 for dir in */; do
@@ -367,10 +374,23 @@ for dir in */; do
   fi
 done
 
-# Forzar opencv-python-headless DESPUÉS de todo (requirements pueden instalar opencv-python que falla sin libGL)
+# Dependencias extra para VideoHelperSuite/LTX
+pip install -q opencv-python-headless imageio-ffmpeg av einops 2>/dev/null || true
+# Forzar headless DESPUÉS de todo (requirements pueden reinstalar opencv-python que falla sin libGL)
 pip uninstall -y opencv-python 2>/dev/null || true
-pip install -q opencv-python-headless imageio-ffmpeg 2>/dev/null || true
-echo "   ✓ cv2 (headless) + ffmpeg instalados"
+pip install -q opencv-python-headless 2>/dev/null || true
+echo "   ✓ cv2 (headless) + imageio-ffmpeg + av + ffmpeg instalados"
+
+# Verificación rápida de imports críticos para custom nodes de vídeo
+python3 - <<'PYTHON_EOF' || true
+mods = ['cv2', 'imageio_ffmpeg', 'av']
+for mod in mods:
+    try:
+        __import__(mod)
+        print(f'   ✓ import {mod}')
+    except Exception as e:
+        print(f'   ⚠️ import {mod} falló: {e}')
+PYTHON_EOF
 
 cd /workspace
 
@@ -481,6 +501,23 @@ supervisorctl update
 echo "   Rearrancando ComfyUI..."
 supervisorctl start comfyui 2>/dev/null || true
 supervisorctl start api-wrapper 2>/dev/null || true
+
+# Verificar que los nodos críticos de vídeo hayan cargado realmente en ComfyUI
+for i in $(seq 1 30); do
+  if curl -sf http://localhost:18188/object_info > /tmp/comfy_object_info.json 2>/dev/null; then
+    if grep -q '"VHS_VideoCombine"' /tmp/comfy_object_info.json; then
+      echo "   ✓ Nodo VHS_VideoCombine cargado"
+      break
+    fi
+    echo "   Esperando a que ComfyUI cargue custom nodes de vídeo... ($i/30)"
+  fi
+  sleep 2
+done
+
+if [ -f /tmp/comfy_object_info.json ] && ! grep -q '"VHS_VideoCombine"' /tmp/comfy_object_info.json; then
+  echo "⚠️ VHS_VideoCombine sigue sin aparecer en /object_info"
+  echo "   Revisa /workspace/ComfyUI/user/comfyui.log para errores de carga"
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
