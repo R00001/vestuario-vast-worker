@@ -235,11 +235,11 @@ try:
         print(f'  {f}')
     
     # Mapeo: qué descargar y dónde ponerlo
+    # NOTA: NO hay fp8 ni gemma en este repo. Usamos distilled como base.
     downloads = {
-        'dev-fp8': {'pattern': 'dev-fp8', 'dest_dir': checkpoints, 'desc': 'Base model fp8'},
-        'gemma': {'pattern': 'gemma', 'dest_dir': text_encoders, 'desc': 'Gemma text encoder'},
+        'base-distilled': {'pattern': '22b-distilled.safetensors', 'dest_dir': checkpoints, 'desc': 'Base model distilled'},
         'distilled-lora': {'pattern': 'distilled-lora', 'dest_dir': loras, 'desc': 'Distilled LoRA'},
-        'upscaler': {'pattern': 'upscaler', 'dest_dir': upscale, 'desc': 'Spatial upscaler'},
+        'upscaler-x2': {'pattern': 'upscaler-x2', 'dest_dir': upscale, 'desc': 'Spatial upscaler x2'},
     }
     
     for key, info in downloads.items():
@@ -274,6 +274,46 @@ try:
 except Exception as e:
     print(f'Error descargando LTX-2.3: {e}')
 " 2>&1
+
+# Descargar Gemma 3 text encoder (NO está en el repo LTX, está en comfyanonymous)
+if [ ! -f "$TEXT_ENCODERS_DIR/gemma_3_12B_it_fp4_mixed.safetensors" ]; then
+  echo "   Descargando Gemma 3 12B fp4 text encoder..."
+  python3 -c "
+import os, shutil
+from huggingface_hub import hf_hub_download, list_repo_files
+
+token = os.environ.get('HF_TOKEN')
+text_encoders = '$TEXT_ENCODERS_DIR'
+
+# Buscar en repos comunes
+repos = [
+    'comfyanonymous/gemma_3_text_encoders',
+    'Comfy-Org/gemma_3_text_encoders',
+    'Lightricks/LTX-2.3-text-encoders',
+    'google/gemma-3-12b-it',
+]
+
+for repo in repos:
+    try:
+        files = list_repo_files(repo, token=token)
+        gemma = [f for f in files if 'gemma' in f.lower() and f.endswith('.safetensors')]
+        if gemma:
+            target = [f for f in gemma if 'fp4' in f.lower() or 'mixed' in f.lower()]
+            if not target:
+                target = gemma
+            print(f'Encontrado en {repo}: {target[0]}')
+            p = hf_hub_download(repo, target[0], token=token)
+            dest = os.path.join(text_encoders, 'gemma_3_12B_it_fp4_mixed.safetensors')
+            shutil.copy2(p, dest)
+            print(f'✓ Gemma guardado: {os.path.getsize(dest)/1e9:.1f}GB')
+            break
+    except Exception as e:
+        print(f'  {repo}: {e}')
+        continue
+" 2>&1
+else
+  echo "   ✓ Gemma 3 ya existe"
+fi
 
 echo "✅ [$(date)] LTX-2.3 completo (base + Gemma + LoRA + upscaler)"
 
