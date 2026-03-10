@@ -3,7 +3,7 @@
 # LOOKS - Provisioning Script para Template Vast.ai ComfyUI
 # 
 # GPU: RTX 6000 96GB — carga todos los modelos simultáneamente
-# DISCO MÍNIMO: 200GB
+# DISCO MÍNIMO: 250GB (modelos: Klein 17GB + LTX base 27GB + Gemma 9GB + LoRAs + template ~20GB)
 # Modelos: FLUX Klein 9B + LoRAs (try-on/try-off) + LTX-2.3 (video)
 #
 # ENV VARS REQUERIDAS en Vast:
@@ -25,9 +25,9 @@ echo "   GPU: 96GB VRAM — todos los modelos residentes"
 # Verificar espacio en disco
 DISK_AVAIL=$(df -BG /workspace | tail -1 | awk '{print $4}' | sed 's/G//')
 echo "   Disco disponible: ${DISK_AVAIL}GB"
-if [ "$DISK_AVAIL" -lt 180 ]; then
-  echo "⚠️ ADVERTENCIA: Menos de 180GB disponibles (hay ${DISK_AVAIL}GB)."
-  echo "   Se necesitan ~150GB para modelos. Configura ≥200GB en Vast."
+if [ "$DISK_AVAIL" -lt 200 ]; then
+  echo "⚠️ ADVERTENCIA: Menos de 200GB disponibles (hay ${DISK_AVAIL}GB)."
+  echo "   Se necesitan ~120GB para modelos. Configura ≥250GB en Vast."
 fi
 
 # Verificar HF_TOKEN
@@ -205,75 +205,59 @@ echo "✅ [$(date)] Klein 9B + LoRAs + T5-XXL listos"
 
 # ============================================================
 # PASO 1.5: Descargar LTX-2.3 para video lookbook
+# Necesita: modelo base fp8 (27GB) + Gemma text encoder (8.8GB)
+#           + LoRA distilled (7GB) + upscaler (950MB)
 # ============================================================
 echo ""
-echo "🎬 PASO 1.5: Descargando LTX-2.3 22B distilled para video..."
+echo "🎬 PASO 1.5: Descargando LTX-2.3 para video..."
 echo ""
 
-# LTX-2.3 — buscar y descargar con huggingface-cli
-LTX_FOUND=$(ls "$CHECKPOINTS_DIR"/*ltx* 2>/dev/null | head -1)
-if [ -z "$LTX_FOUND" ]; then
-  echo "   Descargando LTX-2.3 con huggingface-cli..."
-  echo "   Buscando versión distilled (8 steps, más rápida)..."
-  
-  python3 -c "
-import os, shutil
-from huggingface_hub import hf_hub_download, list_repo_files
+LATENT_UPSCALE_DIR="/workspace/ComfyUI/models/latent_upscale_models"
+mkdir -p "$LATENT_UPSCALE_DIR"
 
-token = os.environ.get('HF_TOKEN')
-checkpoints_dir = '$CHECKPOINTS_DIR'
-
-try:
-    files = list_repo_files('Lightricks/LTX-2.3', token=token)
-    safetensors = [f for f in files if f.endswith('.safetensors')]
-    print(f'Archivos en Lightricks/LTX-2.3:')
-    for f in files:
-        print(f'  {f}')
-    print(f'Safetensors: {safetensors}')
-    
-    # Prioridad: distilled > dev > cualquiera
-    target = None
-    for f in safetensors:
-        if 'distilled' in f.lower():
-            target = f
-            break
-    if not target:
-        for f in safetensors:
-            if 'dev' in f.lower() or '/' not in f:
-                target = f
-                break
-    if not target and safetensors:
-        target = safetensors[0]
-    
-    if target:
-        print(f'Descargando: {target}')
-        path = hf_hub_download('Lightricks/LTX-2.3', target, local_dir='/tmp/ltx_download', token=token)
-        
-        # Nombre limpio para ComfyUI
-        basename = os.path.basename(target)
-        dest = os.path.join(checkpoints_dir, basename)
-        shutil.copy2(path, dest)
-        print(f'✓ Guardado: {dest}')
-        print(f'✓ Tamaño: {os.path.getsize(dest) / 1e9:.1f}GB')
-    else:
-        print('No safetensors encontrados en Lightricks/LTX-2.3')
-except Exception as e:
-    print(f'Error: {e}')
-" 2>&1
-
-  rm -rf /tmp/ltx_download 2>/dev/null
-  
-  LTX_FOUND=$(ls "$CHECKPOINTS_DIR"/*ltx* 2>/dev/null | head -1)
-  if [ ! -z "$LTX_FOUND" ]; then
-    echo "   ✓ LTX-2.3 descargado: $LTX_FOUND"
-  else
-    echo "⚠️ LTX-2.3 no disponible — video lookbook desactivado"
-  fi
+# 1. Modelo base LTX-2.3 fp8 (27GB) → checkpoints
+if [ ! -f "$CHECKPOINTS_DIR/ltx-2.3-22b-dev-fp8.safetensors" ]; then
+  echo "   Descargando LTX-2.3 base fp8 (~27GB)..."
+  wget --progress=bar:force:noscroll \
+    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-dev-fp8.safetensors" \
+    -O "$CHECKPOINTS_DIR/ltx-2.3-22b-dev-fp8.safetensors" 2>&1 | tail -n 5 || echo "⚠️ LTX base no disponible"
 else
-  echo "   ✓ LTX-2.3 ya existe: $LTX_FOUND"
+  echo "   ✓ LTX-2.3 base ya existe"
 fi
 
-echo "✅ [$(date)] LTX-2.3 listo"
+# 2. Gemma 3 text encoder (8.8GB) → text_encoders
+if [ ! -f "$TEXT_ENCODERS_DIR/gemma_3_12B_it_fp4_mixed.safetensors" ]; then
+  echo "   Descargando Gemma 3 12B text encoder (~8.8GB)..."
+  wget --progress=bar:force:noscroll \
+    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/gemma_3_12B_it_fp4_mixed.safetensors" \
+    -O "$TEXT_ENCODERS_DIR/gemma_3_12B_it_fp4_mixed.safetensors" 2>&1 | tail -n 5 || echo "⚠️ Gemma no disponible"
+else
+  echo "   ✓ Gemma 3 ya existe"
+fi
+
+# 3. LoRA distilled (7GB) → loras (NO checkpoints!)
+if [ ! -f "$LORAS_DIR/ltx-2.3-22b-distilled-lora-384.safetensors" ]; then
+  echo "   Descargando LTX LoRA distilled (~7GB)..."
+  wget --progress=bar:force:noscroll \
+    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled-lora-384.safetensors" \
+    -O "$LORAS_DIR/ltx-2.3-22b-distilled-lora-384.safetensors" 2>&1 | tail -n 5 || echo "⚠️ LTX LoRA no disponible"
+  # Limpiar si estaba en checkpoints por error
+  rm -f "$CHECKPOINTS_DIR/ltx-2.3-22b-distilled-lora-384.safetensors" 2>/dev/null
+else
+  echo "   ✓ LTX LoRA distilled ya existe"
+fi
+
+# 4. Spatial upscaler (950MB) → latent_upscale_models
+if [ ! -f "$LATENT_UPSCALE_DIR/ltx-2.3-spatial-upscaler-x2-1.0.safetensors" ]; then
+  echo "   Descargando LTX spatial upscaler (~950MB)..."
+  wget --progress=bar:force:noscroll \
+    "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.0.safetensors" \
+    -O "$LATENT_UPSCALE_DIR/ltx-2.3-spatial-upscaler-x2-1.0.safetensors" 2>&1 | tail -n 5 || echo "⚠️ Upscaler no disponible"
+else
+  echo "   ✓ LTX upscaler ya existe"
+fi
+
+echo "✅ [$(date)] LTX-2.3 completo (base + Gemma + LoRA + upscaler)"
 
 # ============================================================
 # PASO 1.6: Instalar Custom Nodes
