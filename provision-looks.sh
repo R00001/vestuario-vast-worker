@@ -12,6 +12,12 @@
 
 set -e
 
+# Usar siempre el mismo entorno que ejecuta ComfyUI (/venv/main en el template de Vast)
+VENV_PY="/venv/main/bin/python"
+VENV_PIP="/venv/main/bin/pip"
+if [ ! -x "$VENV_PY" ]; then VENV_PY="$(command -v python3)"; fi
+if [ ! -x "$VENV_PIP" ]; then VENV_PIP="$VENV_PY -m pip"; fi
+
 # Silenciar los servicios que spamean "startup paused until provisioning"
 # Redirigir sus logs para que no llenen la consola
 supervisorctl stop comfyui 2>/dev/null || true
@@ -86,7 +92,7 @@ mkdir -p "$MODELS_DIR" "$LORAS_DIR" "$CHECKPOINTS_DIR"
 
 # --- FLUX Klein 9B base model (GATED — necesita HF_TOKEN + huggingface-cli) ---
 # No sabemos el nombre exacto del .safetensors, huggingface-cli lo descubre
-pip install -q huggingface_hub 2>/dev/null
+${VENV_PIP} install -q huggingface_hub 2>/dev/null
 
 KLEIN_FOUND=$(ls "$MODELS_DIR"/*klein* 2>/dev/null | head -1)
 if [ -z "$KLEIN_FOUND" ]; then
@@ -95,7 +101,7 @@ if [ -z "$KLEIN_FOUND" ]; then
     echo "   (modelo gated, usando HF_TOKEN para autenticación)"
     
     # Descargar TODO el repo Klein — huggingface-cli sabe qué archivos hay
-    python3 -c "
+    ${VENV_PY} -c "
 import os, glob, shutil
 from huggingface_hub import hf_hub_download, list_repo_files
 
@@ -216,7 +222,7 @@ LATENT_UPSCALE_DIR="/workspace/ComfyUI/models/latent_upscale_models"
 mkdir -p "$LATENT_UPSCALE_DIR"
 
 # Descargar TODOS los modelos LTX con huggingface-cli (las URLs directas dan 404)
-python3 -c "
+${VENV_PY} -c "
 import os, shutil
 from huggingface_hub import hf_hub_download, list_repo_files
 from pathlib import Path
@@ -278,7 +284,7 @@ except Exception as e:
 # Descargar Gemma 3 text encoder (NO está en el repo LTX, está en comfyanonymous)
 if [ ! -f "$TEXT_ENCODERS_DIR/gemma_3_12B_it_fp4_mixed.safetensors" ]; then
   echo "   Descargando Gemma 3 12B fp4 text encoder..."
-  python3 -c "
+  ${VENV_PY} -c "
 import os, shutil
 from huggingface_hub import hf_hub_download, list_repo_files
 
@@ -370,19 +376,19 @@ apt-get install -y -qq ffmpeg 2>/dev/null || true
 for dir in */; do
   if [ -f "${dir}requirements.txt" ]; then
     echo "   Instalando deps para ${dir}..."
-    pip install -r "${dir}requirements.txt" 2>/dev/null || true
+    ${VENV_PIP} install -r "${dir}requirements.txt" 2>/dev/null || true
   fi
 done
 
 # Dependencias extra para VideoHelperSuite/LTX
-pip install -q opencv-python-headless imageio-ffmpeg av einops 2>/dev/null || true
+${VENV_PIP} install -q opencv-python-headless imageio-ffmpeg av einops 2>/dev/null || true
 # Forzar headless DESPUÉS de todo (requirements pueden reinstalar opencv-python que falla sin libGL)
-pip uninstall -y opencv-python 2>/dev/null || true
-pip install -q opencv-python-headless 2>/dev/null || true
+${VENV_PIP} uninstall -y opencv-python 2>/dev/null || true
+${VENV_PIP} install -q opencv-python-headless 2>/dev/null || true
 echo "   ✓ cv2 (headless) + imageio-ffmpeg + av + ffmpeg instalados"
 
 # Verificación rápida de imports críticos para custom nodes de vídeo
-python3 - <<'PYTHON_EOF' || true
+${VENV_PY} - <<'PYTHON_EOF' || true
 mods = ['cv2', 'imageio_ffmpeg', 'av']
 for mod in mods:
     try:
@@ -390,6 +396,7 @@ for mod in mods:
         print(f'   ✓ import {mod}')
     except Exception as e:
         print(f'   ⚠️ import {mod} falló: {e}')
+print('   Python usado para verificar deps:', __import__('sys').executable)
 PYTHON_EOF
 
 cd /workspace
@@ -433,7 +440,7 @@ if [ ! -z "$GITHUB_REPO" ]; then
   cd worker
   if [ -f requirements.txt ]; then
     echo "   Instalando dependencias..."
-    pip install -r requirements.txt
+    ${VENV_PIP} install -r requirements.txt
   fi
   cd /workspace
 else
@@ -451,7 +458,7 @@ echo ""
 MAX_WAIT=60
 WAITED=0
 while [ $WAITED -lt $MAX_WAIT ]; do
-  if python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+  if ${VENV_PY} -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
     echo "   ✓ CUDA: $(python3 -c 'import torch; print(torch.cuda.get_device_name(0))' 2>/dev/null)"
     echo "   ✓ VRAM: $(python3 -c 'import torch; print(f\"{torch.cuda.get_device_properties(0).total_mem/1e9:.0f}GB\")' 2>/dev/null)"
     break
